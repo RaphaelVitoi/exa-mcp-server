@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
@@ -12,27 +11,29 @@ export function registerExaCodeTool(
   server: McpServer,
   config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
 ): void {
-  server.tool(
+  server.registerTool(
     "get_code_context_exa",
-    `Find code examples, documentation, and programming solutions. 
+    {
+      description: `Find code examples, documentation, and programming solutions. 
 
 Best for: Any programming question - API usage, library examples, code snippets, debugging help.
 Returns: Relevant code and documentation.
 
 Query tips: describe what you're looking for specifically. "Python requests library POST with JSON body" not "python http".
 If highlights are insufficient, follow up with web_fetch_exa on the best URLs.`,
-    {
-      query: lenientString().describe(
-        "Search query to find relevant context for APIs, Libraries, and SDKs. For example, 'React useState hook examples', 'Python pandas dataframe filtering', 'Express.js middleware', 'Next js partial prerendering configuration'",
-      ),
-      numResults: lenientOptionalNumber().describe(
-        "Number of search results to return (default: 8)",
-      ),
-    },
-    {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
+      inputSchema: {
+        query: lenientString().describe(
+          "Search query to find relevant context for APIs, Libraries, and SDKs. For example, 'React useState hook examples', 'Python pandas dataframe filtering', 'Express.js middleware', 'Next js partial prerendering configuration'",
+        ),
+        numResults: lenientOptionalNumber().describe(
+          "Number of search results to return (default: 8)",
+        ),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
     },
     async ({ query, numResults }) => {
       const logger = createRequestLogger("get_code_context_exa");
@@ -70,7 +71,7 @@ If highlights are insufficient, follow up with web_fetch_exa on the best URLs.`,
         checkpoint("code_context_response_received");
         logger.log("Received code search response from Exa API");
 
-        if (!response || !response.results || response.results.length === 0) {
+        if (!response?.results?.length) {
           logger.log("Warning: Empty or invalid response from Exa API");
           checkpoint("code_context_complete");
           return {

@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
@@ -21,9 +20,10 @@ export function registerWebSearchTool(
   config?: WebSearchConfig,
   toolName?: string,
 ): void {
-  server.tool(
+  server.registerTool(
     toolName || "web_search_exa",
-    `Search the web for any topic and get clean, ready-to-use content.
+    {
+      description: `Search the web for any topic and get clean, ready-to-use content.
 
       Best for: Finding current information, news, facts, people, companies, or answering questions about any topic.
       Returns: Clean text content from top search results.
@@ -32,28 +32,27 @@ export function registerWebSearchTool(
       describe the ideal page, not keywords. "blog post comparing React and Vue performance" not "React vs Vue".
       Use category:people / category:company to search through Linkedin profiles / companies respectively.
       If highlights are insufficient, follow up with web_fetch_exa on the best URLs.`,
-    {
-      query: lenientString().describe(
-        "Natural language search query. Should be a semantically rich description of the ideal page, not just keywords. Optionally include category:<type> (company, people) to focus results — e.g. 'category:people John Doe software engineer'.",
-      ),
-      numResults: lenientOptionalNumber().describe(
-        "Number of search results to return (default: 10).",
-      ),
-    },
-    {
-      readOnlyHint: true,
-      destructiveHint: false,
-      openWorldHint: true,
-      idempotentHint: true,
+      inputSchema: {
+        query: lenientString().describe(
+          "Natural language search query. Should be a semantically rich description of the ideal page, not just keywords. Optionally include category:<type> (company, people) to focus results — e.g. 'category:people John Doe software engineer'.",
+        ),
+        numResults: lenientOptionalNumber().describe(
+          "Number of search results to return (default: 10).",
+        ),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+        idempotentHint: true,
+      },
     },
     async ({ query, numResults }) => {
       const toolId = toolName || "web_search_exa";
       const logger = createRequestLogger(toolId);
 
-      // Extract category:<type> from query string if present
-      const categoryMatch = query.match(
-        /\bcategory:(company|publication|news|personal\s*site|people)\b/i,
-      );
+      const categoryPattern = /\bcategory:(company|publication|news|personal\s*site|people)\b/i;
+      const categoryMatch = categoryPattern.exec(query);
       const category = categoryMatch
         ? (categoryMatch[1].toLowerCase().replace(/\s+/g, " ") as
             | "company"
@@ -102,7 +101,7 @@ export function registerWebSearchTool(
         checkpoint("exa_search_response_received");
         logger.log("Received response from Exa API");
 
-        if (!response || !response.results || response.results.length === 0) {
+        if (!response?.results?.length) {
           logger.log("Warning: Empty or invalid response from Exa API");
           checkpoint("web_search_complete");
           return {

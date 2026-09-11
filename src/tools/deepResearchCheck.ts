@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ExaError } from "exa-js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
-import { DeepResearchCheckResponse, DeepResearchErrorResponse } from "../types.js";
+import { DeepResearchCheckResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
 import { retryWithBackoff, formatToolError } from "../utils/errorHandler.js";
 import { checkpoint } from "agnost";
@@ -16,20 +16,22 @@ export function registerDeepResearchCheckTool(
   server: McpServer,
   config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
 ): void {
-  server.tool(
+  server.registerTool(
     "deep_researcher_check",
-    `[Deprecated] Check status and get results from a deep research task.
+    {
+      description: `[Deprecated] Check status and get results from a deep research task.
 
 Best for: Getting the research report after calling deep_researcher_start.
 Returns: Research report when complete, or status update if still running.
 Important: Keep calling with the same research ID until status is 'completed'.`,
-    {
-      researchId: z.string().describe("The research ID returned from deep_researcher_start tool"),
-    },
-    {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
+      inputSchema: {
+        researchId: z.string().describe("The research ID returned from deep_researcher_start tool"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
     },
     async ({ researchId }) => {
       const logger = createRequestLogger("deep_researcher_check");

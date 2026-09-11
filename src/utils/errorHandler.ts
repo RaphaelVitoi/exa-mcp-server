@@ -116,11 +116,12 @@ export function formatToolError(
     return { content: [{ type: "text" as const, text: lines.join("\n") }], isError: true };
   }
 
+  const errorMessage = error instanceof Error ? error.message : String(error);
   return {
     content: [
       {
         type: "text" as const,
-        text: `${toolName} error: ${error instanceof Error ? error.message : String(error)}`,
+        text: `${toolName} error: ${errorMessage}`,
       },
     ],
     isError: true,

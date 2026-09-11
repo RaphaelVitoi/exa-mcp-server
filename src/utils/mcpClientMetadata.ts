@@ -8,7 +8,7 @@ const UNKNOWN_MCP_CLIENT_NAME = "unknown";
 function escapeNonAsciiJsonCharacters(value: string): string {
   return value.replace(
     /[\u0080-\uFFFF]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    (character) => String.raw`\u` + character.codePointAt(0)!.toString(16).padStart(4, "0"),
   );
 }
 
@@ -39,7 +39,7 @@ function sanitizeMcpClientField(
 
   let withoutControlCharacters = "";
   for (const character of value) {
-    const codePoint = character.charCodeAt(0);
+    const codePoint = character.codePointAt(0) ?? 0;
     withoutControlCharacters += codePoint <= 31 || codePoint === 127 ? " " : character;
   }
 

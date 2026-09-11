@@ -9,12 +9,12 @@ function stripFrontmatter(content: string): string {
 }
 
 function moduleDir(): string {
-  const dir =
-    typeof import.meta !== "undefined" && import.meta.url
-      ? dirname(fileURLToPath(import.meta.url))
-      : typeof __dirname !== "undefined"
-        ? __dirname
-        : undefined;
+  let dir: string | undefined;
+  if (import.meta?.url !== undefined) {
+    dir = dirname(fileURLToPath(import.meta.url));
+  } else if (typeof __dirname !== "undefined") {
+    dir = __dirname;
+  }
   if (!dir) throw new Error("Cannot locate the Agent Skill file at runtime");
   return dir;
 }

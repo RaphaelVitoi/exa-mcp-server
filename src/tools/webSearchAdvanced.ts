@@ -13,18 +13,7 @@ import {
 } from "./validation.js";
 import { checkpoint } from "agnost";
 
-export function registerWebSearchAdvancedTool(
-  server: McpServer,
-  config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
-): void {
-  server.tool(
-    "web_search_advanced_exa",
-    `Advanced web search with full control over filters, domains, dates, and content options.
-
-Best for: When you need specific filters like date ranges, domain restrictions, or category filters.
-Not recommended for: Simple searches - use web_search_exa instead.
-Returns: Search results with optional highlights, summaries, and subpage content.`,
-    {
+const webSearchAdvancedInputShape = {
       query: lenientString().describe("Search query - can be a question, statement, or keywords"),
       numResults: lenientOptionalNumber().describe("Number of results (1-100, default: 10)"),
       type: z
@@ -128,12 +117,94 @@ Returns: Search results with optional highlights, summaries, and subpage content
         .array(z.string())
         .optional()
         .describe("Keywords to target when selecting subpages"),
-    },
+};
+
+type AdvancedSearchParams = z.infer<z.ZodObject<typeof webSearchAdvancedInputShape>>;
+
+// Campo opcional so entra no corpo quando carrega valor util. A API distingue
+// ausencia de lista vazia, entao "" e [] nao devem ser enviados -- mas false SIM,
+// porque moderation: false e uma escolha, nao uma omissao.
+function definedFields<T extends object>(fields: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => {
+      if (value == null || value === "") return false;
+      return !Array.isArray(value) || value.length > 0;
+    }),
+  ) as Partial<T>;
+}
+
+function buildAdvancedContents(
+  params: AdvancedSearchParams,
+): ExaAdvancedSearchRequest["contents"] {
+  return {
+    text: params.textMaxCharacters ? { maxCharacters: params.textMaxCharacters } : true,
+    ...(params.maxAgeHours !== undefined
+      ? { maxAgeHours: params.maxAgeHours }
+      : { livecrawl: "fallback" as const }),
+    ...(params.livecrawlTimeout ? { livecrawlTimeout: params.livecrawlTimeout } : {}),
+    ...(params.contextMaxCharacters
+      ? { context: { maxCharacters: params.contextMaxCharacters } }
+      : {}),
+    ...(params.enableSummary
+      ? { summary: params.summaryQuery ? { query: params.summaryQuery } : true }
+      : {}),
+    ...(params.enableHighlights
+      ? {
+          highlights: {
+            maxCharacters: params.highlightsMaxCharacters,
+            numSentences: params.highlightsNumSentences,
+            highlightsPerUrl: params.highlightsPerUrl,
+            query: params.highlightsQuery,
+          },
+        }
+      : {}),
+    ...(params.subpages ? { subpages: params.subpages } : {}),
+    ...(params.subpageTarget ? { subpageTarget: params.subpageTarget } : {}),
+  };
+}
+
+function buildAdvancedSearchRequest(params: AdvancedSearchParams): ExaAdvancedSearchRequest {
+  return {
+    query: params.query,
+    type: params.type || "auto",
+    numResults: params.numResults || 10,
+    contents: buildAdvancedContents(params),
+    ...definedFields({
+      category: params.category,
+      includeDomains: params.includeDomains,
+      excludeDomains: params.excludeDomains,
+      startPublishedDate: params.startPublishedDate,
+      endPublishedDate: params.endPublishedDate,
+      startCrawlDate: params.startCrawlDate,
+      endCrawlDate: params.endCrawlDate,
+      includeText: params.includeText,
+      excludeText: params.excludeText,
+      userLocation: params.userLocation,
+      moderation: params.moderation,
+      additionalQueries: params.additionalQueries,
+    }),
+  };
+}
+
+export function registerWebSearchAdvancedTool(
+  server: McpServer,
+  config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
+): void {
+  server.registerTool(
+    "web_search_advanced_exa",
     {
-      readOnlyHint: true,
-      destructiveHint: false,
-      openWorldHint: false,
-      idempotentHint: true,
+      description: `Advanced web search with full control over filters, domains, dates, and content options.
+
+Best for: When you need specific filters like date ranges, domain restrictions, or category filters.
+Not recommended for: Simple searches - use web_search_exa instead.
+Returns: Search results with optional highlights, summaries, and subpage content.`,
+      inputSchema: webSearchAdvancedInputShape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: true,
+      },
     },
     async (params) => {
       const logger = createRequestLogger("web_search_advanced_exa");
@@ -142,94 +213,7 @@ Returns: Search results with optional highlights, summaries, and subpage content
 
       try {
         const exa = createExaClient(config);
-
-        const contents: ExaAdvancedSearchRequest["contents"] = {
-          text: params.textMaxCharacters ? { maxCharacters: params.textMaxCharacters } : true,
-          ...(params.maxAgeHours !== undefined
-            ? { maxAgeHours: params.maxAgeHours }
-            : { livecrawl: "fallback" as const }),
-          ...(params.livecrawlTimeout && { livecrawlTimeout: params.livecrawlTimeout }),
-        };
-
-        if (params.contextMaxCharacters) {
-          contents.context = { maxCharacters: params.contextMaxCharacters };
-        }
-
-        if (params.enableSummary) {
-          contents.summary = params.summaryQuery ? { query: params.summaryQuery } : true;
-        }
-
-        if (params.enableHighlights) {
-          contents.highlights = {
-            maxCharacters: params.highlightsMaxCharacters,
-            numSentences: params.highlightsNumSentences,
-            highlightsPerUrl: params.highlightsPerUrl,
-            query: params.highlightsQuery,
-          };
-        }
-
-        if (params.subpages) {
-          contents.subpages = params.subpages;
-        }
-
-        if (params.subpageTarget) {
-          contents.subpageTarget = params.subpageTarget;
-        }
-
-        const searchRequest: ExaAdvancedSearchRequest = {
-          query: params.query,
-          type: params.type || "auto",
-          numResults: params.numResults || 10,
-          contents,
-        };
-
-        if (params.category) {
-          searchRequest.category = params.category;
-        }
-
-        if (params.includeDomains && params.includeDomains.length > 0) {
-          searchRequest.includeDomains = params.includeDomains;
-        }
-
-        if (params.excludeDomains && params.excludeDomains.length > 0) {
-          searchRequest.excludeDomains = params.excludeDomains;
-        }
-
-        if (params.startPublishedDate) {
-          searchRequest.startPublishedDate = params.startPublishedDate;
-        }
-
-        if (params.endPublishedDate) {
-          searchRequest.endPublishedDate = params.endPublishedDate;
-        }
-
-        if (params.startCrawlDate) {
-          searchRequest.startCrawlDate = params.startCrawlDate;
-        }
-
-        if (params.endCrawlDate) {
-          searchRequest.endCrawlDate = params.endCrawlDate;
-        }
-
-        if (params.includeText && params.includeText.length > 0) {
-          searchRequest.includeText = params.includeText;
-        }
-
-        if (params.excludeText && params.excludeText.length > 0) {
-          searchRequest.excludeText = params.excludeText;
-        }
-
-        if (params.userLocation) {
-          searchRequest.userLocation = params.userLocation;
-        }
-
-        if (params.moderation !== undefined) {
-          searchRequest.moderation = params.moderation;
-        }
-
-        if (params.additionalQueries && params.additionalQueries.length > 0) {
-          searchRequest.additionalQueries = params.additionalQueries;
-        }
+        const searchRequest = buildAdvancedSearchRequest(params as AdvancedSearchParams);
 
         checkpoint("web_search_advanced_request_prepared");
         logger.log("Sending advanced search request to Exa API");
@@ -266,8 +250,6 @@ Returns: Search results with optional highlights, summaries, and subpage content
         }
 
         const sanitized = sanitizeSearchResponse(response);
-        const searchTime =
-          typeof sanitized.searchTime === "number" ? sanitized.searchTime : undefined;
         const resultText = JSON.stringify(sanitized);
         logger.log(`Response prepared with ${resultText.length} characters`);
 
@@ -277,7 +259,8 @@ Returns: Search results with optional highlights, summaries, and subpage content
               type: "text" as const,
               text: resultText,
               _meta: {
-                searchTime: searchTime,
+                searchTime:
+                  typeof sanitized.searchTime === "number" ? sanitized.searchTime : undefined,
               },
             },
           ],

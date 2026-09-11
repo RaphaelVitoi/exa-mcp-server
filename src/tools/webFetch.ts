@@ -36,34 +36,36 @@ export function registerWebFetchTool(
   config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
   toolName?: string,
 ): void {
-  server.tool(
+  server.registerTool(
     toolName || "web_fetch_exa",
-    `Read a webpage's full content as clean markdown. Use after web_search_exa when highlights are insufficient or to read any URL.
+    {
+      description: `Read a webpage's full content as clean markdown. Use after web_search_exa when highlights are insufficient or to read any URL.
 
 Best for: Extracting full content from known URLs. Batch multiple URLs in one call.
 Returns: Clean text content and metadata from the page(s).`,
-    {
-      urls: z
-        .preprocess((val) => {
-          if (typeof val === "string") {
-            try {
-              return JSON.parse(val);
-            } catch {
-              return [val];
+      inputSchema: {
+        urls: z
+          .preprocess((val) => {
+            if (typeof val === "string") {
+              try {
+                return JSON.parse(val);
+              } catch {
+                return [val];
+              }
             }
-          }
-          return val;
-        }, z.array(z.string()))
-        .describe("URLs to read. Batch multiple URLs in one call."),
-      maxCharacters: lenientOptionalPositiveNumber().describe(
-        "Maximum characters to extract per page (default: 3000)",
-      ),
-    },
-    {
-      readOnlyHint: true,
-      destructiveHint: false,
-      openWorldHint: true,
-      idempotentHint: true,
+            return val;
+          }, z.array(z.string()))
+          .describe("URLs to read. Batch multiple URLs in one call."),
+        maxCharacters: lenientOptionalPositiveNumber().describe(
+          "Maximum characters to extract per page (default: 3000)",
+        ),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: true,
+        idempotentHint: true,
+      },
     },
     async ({ urls, maxCharacters }) => {
       const logger = createRequestLogger("web_fetch_exa");

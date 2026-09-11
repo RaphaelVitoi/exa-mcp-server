@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
@@ -12,19 +11,21 @@ export function registerLinkedInSearchTool(
   server: McpServer,
   config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
 ): void {
-  server.tool(
+  server.registerTool(
     "linkedin_search_exa",
-    "⚠️ DEPRECATED: This tool is deprecated. Please use 'people_search_exa' instead. This tool will be removed in a future version. For now, it searches for people on LinkedIn using Exa AI - finds professional profiles and people.",
     {
-      query: lenientString().describe("Search query for finding people on LinkedIn"),
-      numResults: lenientOptionalNumber().describe(
-        "Number of LinkedIn profile results to return (default: 5)",
-      ),
-    },
-    {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
+      description: "⚠️ DEPRECATED: This tool is deprecated. Please use 'people_search_exa' instead. This tool will be removed in a future version. For now, it searches for people on LinkedIn using Exa AI - finds professional profiles and people.",
+      inputSchema: {
+        query: lenientString().describe("Search query for finding people on LinkedIn"),
+        numResults: lenientOptionalNumber().describe(
+          "Number of LinkedIn profile results to return (default: 5)",
+        ),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
     },
     async ({ query, numResults }) => {
       const logger = createRequestLogger("linkedin_search_exa");
@@ -34,8 +35,7 @@ export function registerLinkedInSearchTool(
       try {
         const exa = createExaClient(config);
 
-        let searchQuery = query;
-        searchQuery = `${query} LinkedIn profile`;
+        const searchQuery = `${query} LinkedIn profile`;
 
         const searchRequest: ExaSearchRequest = {
           query: searchQuery,
@@ -63,7 +63,7 @@ export function registerLinkedInSearchTool(
         checkpoint("linkedin_search_response_received");
         logger.log("Received response from Exa API");
 
-        if (!response || !response.results || response.results.length === 0) {
+        if (!response?.results?.length) {
           logger.log("Warning: Empty or invalid response from Exa API");
           checkpoint("linkedin_search_complete");
           return {

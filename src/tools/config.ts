@@ -4,7 +4,7 @@ import { serializeMcpClientMetadata } from "../utils/mcpClientMetadata.js";
 function encodeIntegrationSource(source: string): string {
   return Array.from(new TextEncoder().encode(source), (byte) =>
     byte <= 127
-      ? String.fromCharCode(byte)
+      ? String.fromCodePoint(byte)
       : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`,
   ).join("");
 }

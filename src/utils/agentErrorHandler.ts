@@ -20,11 +20,12 @@ export function formatAgentToolError(error: unknown, toolName: string): ToolCont
     };
   }
 
+  const errorMessage = error instanceof Error ? error.message : String(error);
   return {
     content: [
       {
         type: "text",
-        text: `${toolName} error: ${error instanceof Error ? error.message : String(error)}`,
+        text: `${toolName} error: ${errorMessage}`,
       },
     ],
     isError: true,

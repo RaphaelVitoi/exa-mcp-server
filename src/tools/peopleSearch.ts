@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
@@ -12,22 +11,24 @@ export function registerPeopleSearchTool(
   server: McpServer,
   config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
 ): void {
-  server.tool(
+  server.registerTool(
     "people_search_exa",
-    `[Deprecated: Use web_search_advanced_exa instead] Find people and their professional profiles.
+    {
+      description: `[Deprecated: Use web_search_advanced_exa instead] Find people and their professional profiles.
 
 Best for: Finding professionals, executives, or anyone with a public profile.
 Returns: Profile information and links.`,
-    {
-      query: lenientString().describe("Search query for finding people"),
-      numResults: lenientOptionalNumber().describe(
-        "Number of profile results to return (default: 5)",
-      ),
-    },
-    {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
+      inputSchema: {
+        query: lenientString().describe("Search query for finding people"),
+        numResults: lenientOptionalNumber().describe(
+          "Number of profile results to return (default: 5)",
+        ),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
     },
     async ({ query, numResults }) => {
       const logger = createRequestLogger("people_search_exa");
@@ -37,8 +38,7 @@ Returns: Profile information and links.`,
       try {
         const exa = createExaClient(config);
 
-        let searchQuery = query;
-        searchQuery = `${query} profile`;
+        const searchQuery = `${query} profile`;
 
         const searchRequest: ExaSearchRequest = {
           query: searchQuery,
@@ -66,7 +66,7 @@ Returns: Profile information and links.`,
         checkpoint("people_search_response_received");
         logger.log("Received response from Exa API");
 
-        if (!response || !response.results || response.results.length === 0) {
+        if (!response?.results?.length) {
           logger.log("Warning: Empty or invalid response from Exa API");
           checkpoint("people_search_complete");
           return {

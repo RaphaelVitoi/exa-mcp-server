@@ -1,5 +1,3 @@
-import { ExaDeepSearchResponse, ExaSearchResponse } from "../types.js";
-
 const SENSITIVE_RESPONSE_KEYS = new Set(["requestTags"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -291,13 +289,13 @@ function sanitizeTopLevelResponse(value: unknown): Record<string, unknown> {
 }
 
 export function sanitizeSearchResponse(
-  response: ExaSearchResponse | unknown,
+  response: unknown,
 ): Record<string, unknown> {
   return sanitizeTopLevelResponse(response);
 }
 
 export function sanitizeDeepSearchStructuredResponse(
-  response: ExaDeepSearchResponse | unknown,
+  response: unknown,
 ): Record<string, unknown> {
   const sanitized = sanitizeTopLevelResponse(response);
   const structured: Record<string, unknown> = {};

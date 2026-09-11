@@ -13,18 +13,7 @@ import {
 } from "./validation.js";
 import { checkpoint } from "agnost";
 
-export function registerDeepSearchTool(
-  server: McpServer,
-  config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
-): void {
-  server.tool(
-    "deep_search_exa",
-    `[Deprecated: Use web_search_advanced_exa instead] Deep search with automatic query expansion for thorough research. Generates multiple search variations to find results from multiple angles, then synthesizes a short answer with citations.
-
-Best for: Complex questions needing information from multiple angles.
-Returns: A synthesized answer with citations, plus individual search results with highlights. When structuredOutput is enabled, returns structured JSON instead of markdown.
-Note: Requires an Exa API key. 'deep' mode takes 4-12s, 'deep-reasoning' takes 12-50s.`,
-    {
+const deepSearchInputShape = {
       objective: lenientString().describe(
         "Natural language description of what the web search is looking for. Try to make the search query atomic - looking for a specific piece of information.",
       ),
@@ -60,59 +49,145 @@ Note: Requires an Exa API key. 'deep' mode takes 4-12s, 'deep-reasoning' takes 1
       structuredOutput: lenientOptionalBoolean().describe(
         "When true, returns a structured JSON response instead of markdown. The API will determine the appropriate structure based on the query. Prefer using outputSchema for more control over the response shape.",
       ),
-    },
-    {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: false,
-    },
-    async ({
-      objective,
-      search_queries,
-      type,
-      numResults,
-      highlightMaxCharacters,
-      outputSchema,
-      systemPrompt,
-      structuredOutput,
-    }) => {
-      const logger = createRequestLogger("deep_search_exa");
+};
 
-      logger.start(objective);
+type DeepSearchConfig = { exaApiKey?: string; userProvidedApiKey?: boolean };
+type DeepSearchLogger = ReturnType<typeof createRequestLogger>;
+type DeepSearchResult = ExaDeepSearchResponse["results"][number];
+type DeepSearchGrounding = NonNullable<NonNullable<ExaDeepSearchResponse["output"]>["grounding"]>;
+
+type DeepSearchArgs = {
+  objective: string;
+  search_queries?: string[];
+  type?: "deep" | "deep-reasoning";
+  numResults?: number;
+  highlightMaxCharacters?: number;
+  outputSchema?: Record<string, unknown>;
+  systemPrompt?: string;
+  structuredOutput?: boolean;
+};
+
+// outputSchema explicito vence o flag structuredOutput: quem declarou a forma
+// esperada nao deve receber o objeto generico no lugar dela.
+function resolveOutputSchema(
+  args: DeepSearchArgs,
+  logger: DeepSearchLogger,
+): Record<string, unknown> | undefined {
+  if (args.outputSchema) {
+    logger.log("Using custom output schema");
+    return args.outputSchema;
+  }
+  if (args.structuredOutput) {
+    logger.log("Using default structured output");
+    return { type: "object" };
+  }
+  return undefined;
+}
+
+function resolveAdditionalQueries(
+  searchQueries: string[] | undefined,
+  logger: DeepSearchLogger,
+): string[] | undefined {
+  if (searchQueries && searchQueries.length > 0) {
+    logger.log(`Using ${searchQueries.length} additional queries`);
+    return searchQueries;
+  }
+  logger.log("Using automatic query expansion");
+  return undefined;
+}
+
+function buildDeepSearchRequest(
+  args: DeepSearchArgs,
+  logger: DeepSearchLogger,
+): ExaDeepSearchRequest {
+  const outputSchema = resolveOutputSchema(args, logger);
+  const additionalQueries = resolveAdditionalQueries(args.search_queries, logger);
+  if (args.systemPrompt) logger.log("Using system prompt");
+
+  return {
+    query: args.objective,
+    type: args.type || "deep",
+    numResults: args.numResults || API_CONFIG.DEFAULT_NUM_RESULTS,
+    contents: {
+      highlights: {
+        maxCharacters: args.highlightMaxCharacters || 4000,
+      },
+    },
+    ...(outputSchema ? { outputSchema } : {}),
+    ...(args.systemPrompt ? { systemPrompt: args.systemPrompt } : {}),
+    ...(additionalQueries ? { additionalQueries } : {}),
+  };
+}
+
+function formatResultEntry(result: DeepSearchResult, index: number): string {
+  return [
+    `### ${index + 1}. ${result.title || "Untitled"}`,
+    `**URL:** ${result.url}`,
+    ...(result.publishedDate ? [`**Published:** ${result.publishedDate}`] : []),
+    ...(result.image ? [`**Image:** ${result.image}`] : []),
+    ...(result.highlights && result.highlights.length > 0
+      ? [`\n${result.highlights.join("\n\n")}`]
+      : []),
+  ].join("\n");
+}
+
+function formatCitations(grounding: DeepSearchGrounding): string | undefined {
+  const citations = grounding.flatMap((entry) =>
+    (entry.citations ?? []).map((citation) => `- [${citation.title}](${citation.url})`),
+  );
+  return citations.length > 0 ? `## Citations\n\n${citations.join("\n")}` : undefined;
+}
+
+function buildMarkdownSections(data: ExaDeepSearchResponse): string[] {
+  // O original exigia content truthy ALEM de string: uma answer vazia nao vira
+  // secao "## Answer" sem corpo.
+  const content = data.output?.content;
+  const answer =
+    typeof content === "string" && content.length > 0 ? `## Answer\n\n${content}` : undefined;
+  const citations = data.output?.grounding ? formatCitations(data.output.grounding) : undefined;
+  const results =
+    data.results && data.results.length > 0
+      ? `## Results\n\n${data.results.map(formatResultEntry).join("\n\n---\n\n")}`
+      : undefined;
+
+  return [answer, citations, results].filter((section): section is string => section !== undefined);
+}
+
+function textContent(text: string, meta?: Record<string, unknown>) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text,
+        ...(meta ? { _meta: meta } : {}),
+      },
+    ],
+  };
+}
+
+export function registerDeepSearchTool(server: McpServer, config?: DeepSearchConfig): void {
+  server.registerTool(
+    "deep_search_exa",
+    {
+      description: `[Deprecated: Use web_search_advanced_exa instead] Deep search with automatic query expansion for thorough research. Generates multiple search variations to find results from multiple angles, then synthesizes a short answer with citations.
+
+Best for: Complex questions needing information from multiple angles.
+Returns: A synthesized answer with citations, plus individual search results with highlights. When structuredOutput is enabled, returns structured JSON instead of markdown.
+Note: Requires an Exa API key. 'deep' mode takes 4-12s, 'deep-reasoning' takes 12-50s.`,
+      inputSchema: deepSearchInputShape,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: false,
+      },
+    },
+    async (args) => {
+      const logger = createRequestLogger("deep_search_exa");
+      logger.start(args.objective);
 
       try {
         const exa = createExaClient(config);
-
-        const searchRequest: ExaDeepSearchRequest = {
-          query: objective,
-          type: type || "deep",
-          numResults: numResults || API_CONFIG.DEFAULT_NUM_RESULTS,
-          contents: {
-            highlights: {
-              maxCharacters: highlightMaxCharacters || 4000,
-            },
-          },
-        };
-
-        if (outputSchema) {
-          searchRequest.outputSchema = outputSchema;
-          logger.log("Using custom output schema");
-        } else if (structuredOutput) {
-          searchRequest.outputSchema = { type: "object" };
-          logger.log("Using default structured output");
-        }
-
-        if (systemPrompt) {
-          searchRequest.systemPrompt = systemPrompt;
-          logger.log("Using system prompt");
-        }
-
-        if (search_queries && search_queries.length > 0) {
-          searchRequest.additionalQueries = search_queries;
-          logger.log(`Using ${search_queries.length} additional queries`);
-        } else {
-          logger.log("Using automatic query expansion");
-        }
+        const searchRequest = buildDeepSearchRequest(args as DeepSearchArgs, logger);
 
         checkpoint("deep_search_request_prepared");
         logger.log("Sending deep search request to Exa API");
@@ -133,103 +208,29 @@ Note: Requires an Exa API key. 'deep' mode takes 4-12s, 'deep-reasoning' takes 1
         if (!response) {
           logger.log("Warning: Empty response from Exa API");
           checkpoint("deep_search_complete");
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "No search results found. Please try a different query.",
-              },
-            ],
-          };
+          return textContent("No search results found. Please try a different query.");
         }
 
-        const data = response;
-
-        // When structured output was requested (via outputSchema or structuredOutput flag), return the raw JSON response
-        if (outputSchema || structuredOutput) {
-          const structuredResponse = sanitizeDeepSearchStructuredResponse(data);
-
-          const text = JSON.stringify(structuredResponse, null, 2);
+        if (args.outputSchema || args.structuredOutput) {
+          const text = JSON.stringify(sanitizeDeepSearchStructuredResponse(response), null, 2);
           logger.log(`Structured response prepared with ${text.length} characters`);
-
-          const result = {
-            content: [
-              {
-                type: "text" as const,
-                text,
-              },
-            ],
-          };
-
           checkpoint("deep_search_complete");
           logger.complete();
-          return result;
+          return textContent(text);
         }
 
-        const parts: string[] = [];
-
-        // Synthesized answer
-        if (data.output?.content && typeof data.output.content === "string") {
-          parts.push(`## Answer\n\n${data.output.content}`);
-        }
-
-        // Citations from grounding (aggregated into a single section)
-        if (data.output?.grounding) {
-          const allCitations: string[] = [];
-          for (const g of data.output.grounding) {
-            if (g.citations && g.citations.length > 0) {
-              allCitations.push(...g.citations.map((c) => `- [${c.title}](${c.url})`));
-            }
-          }
-          if (allCitations.length > 0) {
-            parts.push(`## Citations\n\n${allCitations.join("\n")}`);
-          }
-        }
-
-        // Individual results as markdown
-        if (data.results && data.results.length > 0) {
-          const resultLines = data.results.map((r, i) => {
-            const lines: string[] = [];
-            lines.push(`### ${i + 1}. ${r.title || "Untitled"}`);
-            lines.push(`**URL:** ${r.url}`);
-            if (r.publishedDate) {
-              lines.push(`**Published:** ${r.publishedDate}`);
-            }
-            if (r.image) {
-              lines.push(`**Image:** ${r.image}`);
-            }
-            if (r.highlights && r.highlights.length > 0) {
-              lines.push(`\n${r.highlights.join("\n\n")}`);
-            }
-            return lines.join("\n");
-          });
-          parts.push(`## Results\n\n${resultLines.join("\n\n---\n\n")}`);
-        }
-
-        const searchTime = typeof data.searchTime === "number" ? data.searchTime : undefined;
-
+        const sections = buildMarkdownSections(response);
         const text =
-          parts.length > 0
-            ? parts.join("\n\n---\n\n")
+          sections.length > 0
+            ? sections.join("\n\n---\n\n")
             : "No results found. Please try a different query.";
-
         logger.log(`Response prepared with ${text.length} characters`);
-
-        const result = {
-          content: [
-            {
-              type: "text" as const,
-              text,
-              _meta: {
-                searchTime: searchTime,
-              },
-            },
-          ],
-        };
 
         checkpoint("deep_search_complete");
         logger.complete();
-        return result;
+        return textContent(text, {
+          searchTime: typeof response.searchTime === "number" ? response.searchTime : undefined,
+        });
       } catch (error) {
         checkpoint("deep_search_complete");
         logger.error(error);

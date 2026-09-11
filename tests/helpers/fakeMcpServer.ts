@@ -3,14 +3,14 @@ export interface RegisteredTool {
   description?: string;
   inputSchema?: unknown;
   annotations?: unknown;
-  handler: (args: any, extra?: unknown) => unknown | Promise<unknown>;
+  handler: (args: unknown, extra?: unknown) => unknown | Promise<unknown>;
 }
 
 export interface RegisteredPrompt {
   name: string;
   description?: string;
   argsSchema?: unknown;
-  handler: (args?: any, extra?: unknown) => unknown | Promise<unknown>;
+  handler: (args?: unknown, extra?: unknown) => unknown | Promise<unknown>;
 }
 
 export interface RegisteredResource {
@@ -21,7 +21,7 @@ export interface RegisteredResource {
 }
 
 function getLastArg<T>(args: unknown[]): T {
-  return args[args.length - 1] as T;
+  return args.at(-1) as T;
 }
 
 export class FakeMcpServer {
@@ -42,6 +42,25 @@ export class FakeMcpServer {
       description,
       inputSchema,
       annotations,
+      handler,
+    });
+  }
+
+  // A assinatura posicional de server.tool() esta depreciada no SDK; registerTool
+  // recebe a configuracao em um objeto. O fake implementa as duas porque o fonte
+  // esta em migracao -- e sem este metodo o teste passaria a nao medir nada.
+  registerTool(name: unknown, config: unknown, handler: RegisteredTool["handler"]): void {
+    const meta = (config ?? {}) as {
+      description?: unknown;
+      inputSchema?: unknown;
+      annotations?: unknown;
+    };
+
+    this.tools.push({
+      name: String(name),
+      description: typeof meta.description === "string" ? meta.description : undefined,
+      inputSchema: meta.inputSchema,
+      annotations: meta.annotations,
       handler,
     });
   }

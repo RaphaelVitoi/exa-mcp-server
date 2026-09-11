@@ -249,6 +249,75 @@ export function formatProgressMessage(event: AgentEvent, runId: string | null): 
   return parts.join(" — ").slice(0, 200);
 }
 
+function extractRunIdFromEvent(event: AgentEvent): string | null {
+  const data =
+    typeof event.data === "object" && event.data !== null && !Array.isArray(event.data)
+      ? (event.data as Record<string, unknown>)
+      : undefined;
+  const id = data?.id;
+  return typeof id === "string" ? id : null;
+}
+
+type StreamLoopParams = {
+  iterator: AsyncIterator<AgentEvent>;
+  interrupt: Promise<Interrupt>;
+  progressBridge: AgentProgressBridge;
+  finish: (status: RunOutcomeStatus, reason?: HandoffReason) => Promise<RunOutcome>;
+  setRunId: (id: string) => void;
+  setTerminalEvent: (e: AgentEvent) => void;
+  incrementEventCount: () => void;
+  getRunId: () => string | null;
+};
+
+// Perder o stream ANTES do ID e irrecuperavel: nao ha o que retomar. Depois dele,
+// o run segue vivo no servidor e o ID volta para o cliente retomar.
+function streamEndOutcome(params: StreamLoopParams, reason: HandoffReason): Promise<RunOutcome> {
+  const hasRunId = params.getRunId() != null;
+  return params.finish(hasRunId ? "running" : "unrecoverable_stream", reason);
+}
+
+function captureRunId(params: StreamLoopParams, event: AgentEvent): void {
+  if (params.getRunId() != null) return;
+  const id = extractRunIdFromEvent(event);
+  if (id !== null) params.setRunId(id);
+}
+
+async function processStreamLoop(params: StreamLoopParams): Promise<RunOutcome | null> {
+  const { iterator, interrupt, progressBridge, finish } = params;
+
+  while (true) {
+    const next = await raceWithInterrupt(iterator.next(), interrupt);
+
+    if (next.kind === "interrupt") {
+      if (next.reason === "client_aborted") return finish("client_aborted");
+      return streamEndOutcome(params, "stream_window_exceeded");
+    }
+    if (next.value.done) return streamEndOutcome(params, "stream_interrupted");
+
+    const event = next.value.value;
+    params.incrementEventCount();
+    captureRunId(params, event);
+    await progressBridge.handle(event);
+
+    const terminalStatus = TERMINAL_EVENTS.get(event.event);
+    if (terminalStatus != null) {
+      params.setTerminalEvent(event);
+      return finish(terminalStatus);
+    }
+  }
+}
+function handleStreamCreationInterrupt(
+  created: { kind: "interrupt"; reason: Interrupt },
+  streamPromise: Promise<AsyncIterable<AgentEvent>>,
+  finish: (status: RunOutcomeStatus, reason?: HandoffReason) => Promise<RunOutcome>,
+): Promise<RunOutcome> {
+  void streamPromise
+    .then((events) => void events[Symbol.asyncIterator]().return?.(undefined))
+    .catch(() => {});
+  if (created.reason === "client_aborted") return finish("client_aborted");
+  return finish("unrecoverable_stream", "stream_window_exceeded");
+}
+
 export async function streamAgentRun(params: {
   client: AgentRunClient;
   runInput: AgentRunInput;
@@ -298,7 +367,6 @@ export async function streamAgentRun(params: {
   ): Promise<RunOutcome> => {
     await cleanup();
     const resultStatus = status === "client_aborted" && runId != null ? "running" : status;
-
     return {
       status: resultStatus,
       terminalEvent,
@@ -316,43 +384,21 @@ export async function streamAgentRun(params: {
     const created = await raceWithInterrupt(streamPromise, interrupt.promise);
 
     if (created.kind === "interrupt") {
-      void streamPromise
-        .then((events) => void events[Symbol.asyncIterator]().return?.(undefined))
-        .catch(() => {});
-      if (created.reason === "client_aborted") return finish("client_aborted");
-      return finish("unrecoverable_stream", "stream_window_exceeded");
+      return handleStreamCreationInterrupt(created, streamPromise, finish);
     }
 
     iterator = created.value[Symbol.asyncIterator]();
-    while (true) {
-      const next = await raceWithInterrupt(iterator.next(), interrupt.promise);
-      if (next.kind === "interrupt") {
-        if (next.reason === "client_aborted") return finish("client_aborted");
-        return finish(runId == null ? "unrecoverable_stream" : "running", "stream_window_exceeded");
-      }
-      if (next.value.done) {
-        return finish(runId == null ? "unrecoverable_stream" : "running", "stream_interrupted");
-      }
-
-      const event = next.value.value;
-      eventCount += 1;
-      if (runId == null) {
-        const eventData =
-          typeof event.data === "object" && event.data !== null && !Array.isArray(event.data)
-            ? (event.data as Record<string, unknown>)
-            : undefined;
-        const eventRunId = eventData?.id;
-        if (typeof eventRunId === "string") runId = eventRunId;
-      }
-
-      await progressBridge.handle(event);
-
-      const terminalStatus = TERMINAL_EVENTS.get(event.event);
-      if (terminalStatus != null) {
-        terminalEvent = event;
-        return finish(terminalStatus);
-      }
-    }
+    const loopResult = await processStreamLoop({
+      iterator,
+      interrupt: interrupt.promise,
+      progressBridge,
+      finish,
+      setRunId: (id) => { runId = id; },
+      setTerminalEvent: (e) => { terminalEvent = e; },
+      incrementEventCount: () => { eventCount += 1; },
+      getRunId: () => runId,
+    });
+    return loopResult!;
   } catch (error) {
     if (params.signal?.aborted) return finish("client_aborted");
     if (runId != null) return finish("running", "stream_interrupted");
@@ -360,6 +406,38 @@ export async function streamAgentRun(params: {
     await cleanup();
     throw error;
   }
+}
+
+async function pollIteration(params: {
+  client: AgentRunClient;
+  runId: string;
+  interrupt: Promise<Interrupt>;
+  emitProgress: (msg: string) => Promise<void>;
+  pollIntervalMs: number;
+  setRun: (r: AgentRun) => void;
+  incrementCount: () => void;
+  finish: (status: RunOutcomeStatus, reason?: HandoffReason) => Promise<RunOutcome>;
+}): Promise<{ done: false } | { done: true; result: RunOutcome }> {
+  const fetched = await raceWithInterrupt(params.client.getRun(params.runId), params.interrupt);
+  if (fetched.kind === "interrupt") {
+    const reason = fetched.reason === "window_exceeded" ? "poll_window_exceeded" : undefined;
+    return { done: true, result: await params.finish("running", reason) };
+  }
+  params.setRun(fetched.value);
+  params.incrementCount();
+  await params.emitProgress(`waiting: run ${params.runId} status=${fetched.value.status}`);
+  if (TERMINAL_STATUSES.has(fetched.value.status)) {
+    return { done: true, result: await params.finish(fetched.value.status as "completed" | "failed" | "cancelled") };
+  }
+  const waited = await raceWithInterrupt(
+    delay(params.pollIntervalMs),
+    params.interrupt,
+  );
+  if (waited.kind === "interrupt") {
+    const reason = waited.reason === "window_exceeded" ? "poll_window_exceeded" : undefined;
+    return { done: true, result: await params.finish("running", reason) };
+  }
+  return { done: false };
 }
 
 export async function pollAgentRun(params: {
@@ -398,35 +476,17 @@ export async function pollAgentRun(params: {
 
   try {
     while (true) {
-      const fetched = await raceWithInterrupt(
-        params.client.getRun(params.runId),
-        interrupt.promise,
-      );
-      if (fetched.kind === "interrupt") {
-        return finish(
-          "running",
-          fetched.reason === "window_exceeded" ? "poll_window_exceeded" : undefined,
-        );
-      }
-
-      run = fetched.value;
-      updateCount += 1;
-      await emitProgress(`waiting: run ${params.runId} status=${run.status}`);
-
-      if (TERMINAL_STATUSES.has(run.status)) {
-        return finish(run.status as "completed" | "failed" | "cancelled");
-      }
-
-      const waited = await raceWithInterrupt(
-        delay(params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS),
-        interrupt.promise,
-      );
-      if (waited.kind === "interrupt") {
-        return finish(
-          "running",
-          waited.reason === "window_exceeded" ? "poll_window_exceeded" : undefined,
-        );
-      }
+      const iteration = await pollIteration({
+        client: params.client,
+        runId: params.runId,
+        interrupt: interrupt.promise,
+        emitProgress,
+        pollIntervalMs: params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+        setRun: (r) => { run = r; },
+        incrementCount: () => { updateCount += 1; },
+        finish,
+      });
+      if (iteration.done) return iteration.result;
     }
   } catch (error) {
     if (params.signal?.aborted) return finish("running");
@@ -535,16 +595,102 @@ function defaultClientFactory(config: AgentRunConfig | undefined): AgentRunClien
   };
 }
 
+type AgentDataSourceRef = NonNullable<AgentRunInput["dataSources"]>[number];
+type AgentRunLogger = ReturnType<typeof createRequestLogger>;
+
+function assertAgentAuth(config: AgentRunConfig | undefined): void {
+  const hasApiKey = typeof config?.exaApiKey === "string" && config.exaApiKey.length > 0;
+  const hasOAuthToken =
+    typeof config?.oauthAccessToken === "string" && config.oauthAccessToken.length > 0;
+  if (!hasApiKey && !hasOAuthToken) {
+    throw new Error(
+      "Agent tools require user authentication. Provide an Exa API key or OAuth access token.",
+    );
+  }
+}
+
+// query e runId sao mutuamente exclusivos, e as opcoes de criacao pertencem so ao
+// caminho de query: uma retomada que as aceitasse em silencio descartaria a
+// intencao do chamador sem avisar.
+function assertExclusiveRunArgs(
+  query: string | undefined,
+  runId: string | undefined,
+  createOptions: readonly unknown[],
+): void {
+  if ((query == null) === (runId == null)) {
+    throw new Error("Provide exactly one of query or runId.");
+  }
+  if (runId != null && createOptions.some((value) => value != null)) {
+    throw new Error(
+      "A runId resume call accepts only runId; create options apply only to a new query.",
+    );
+  }
+}
+
+// Sem progressToken o cliente nao pediu progresso. Se uma notificacao falhar, o
+// canal e desligado para o resto da chamada -- insistir a cada evento transformaria
+// um cliente desconectado em enxurrada de log.
+function createProgressNotifier(
+  extra: StreamToolExtra,
+  logger: AgentRunLogger,
+): ((progress: number, message: string) => Promise<void>) | undefined {
+  const progressToken = extra?._meta?.progressToken;
+  if (progressToken == null) return undefined;
+
+  let progressBroken = false;
+  return async (progress: number, message: string): Promise<void> => {
+    if (progressBroken) return;
+    try {
+      await extra.sendNotification({
+        method: "notifications/progress",
+        params: { progressToken, progress, message },
+      });
+    } catch (error) {
+      progressBroken = true;
+      logger.error(error);
+    }
+  };
+}
+
+function buildAgentRunInput(args: {
+  query: string;
+  systemPrompt?: string;
+  outputSchema?: Record<string, unknown>;
+  input?: AgentRunInput["input"];
+  dataSources?: Array<Partial<AgentDataSourceRef>>;
+  previousRunId?: string;
+  effort?: string;
+}): AgentRunInput {
+  const { query, systemPrompt, outputSchema, input, dataSources, previousRunId, effort } = args;
+  return {
+    query,
+    ...(systemPrompt != null ? { systemPrompt } : {}),
+    ...(outputSchema != null ? { outputSchema } : {}),
+    ...(input != null ? { input } : {}),
+    ...(dataSources != null
+      ? {
+          dataSources: dataSources.flatMap(({ provider }) =>
+            provider != null ? [{ provider }] : [],
+          ),
+        }
+      : {}),
+    ...(previousRunId != null ? { previousRunId } : {}),
+    effort: (effort ?? "low") as AgentEffort,
+  };
+}
+
 export function registerAgentRunTool(
   server: McpServer,
   config?: AgentRunConfig,
   options?: AgentRunToolOptions,
 ): void {
-  server.tool(
+  server.registerTool(
     "agent_run",
-    "Start or resume an Exa Agent run; runs may take several minutes. Retain the returned run ID and resume with runId when the tool reports the run is still running. An interrupted tool call is not an explicit cancellation request.",
-    agentRunInputShape,
-    { readOnlyHint: true, destructiveHint: false, idempotentHint: false },
+    {
+      description: "Start or resume an Exa Agent run; runs may take several minutes. Retain the returned run ID and resume with runId when the tool reports the run is still running. An interrupted tool call is not an explicit cancellation request.",
+      inputSchema: agentRunInputShape,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false },
+    },
     async (
       { query, runId, systemPrompt, outputSchema, input, dataSources, previousRunId, effort },
       extra: StreamToolExtra,
@@ -553,48 +699,18 @@ export function registerAgentRunTool(
       logger.start(runId != null ? "resume request" : "streaming request");
 
       try {
-        const hasApiKey = typeof config?.exaApiKey === "string" && config.exaApiKey.length > 0;
-        const hasOAuthToken =
-          typeof config?.oauthAccessToken === "string" && config.oauthAccessToken.length > 0;
-        if (!hasApiKey && !hasOAuthToken) {
-          throw new Error(
-            "Agent tools require user authentication. Provide an Exa API key or OAuth access token.",
-          );
-        }
-
-        if ((query == null) === (runId == null)) {
-          throw new Error("Provide exactly one of query or runId.");
-        }
-
-        if (
-          runId != null &&
-          [systemPrompt, outputSchema, input, dataSources, previousRunId, effort].some(
-            (value) => value != null,
-          )
-        ) {
-          throw new Error(
-            "A runId resume call accepts only runId; create options apply only to a new query.",
-          );
-        }
+        assertAgentAuth(config);
+        assertExclusiveRunArgs(query, runId, [
+          systemPrompt,
+          outputSchema,
+          input,
+          dataSources,
+          previousRunId,
+          effort,
+        ]);
 
         const client = (options?.clientFactory ?? defaultClientFactory)(config);
-        const progressToken = extra?._meta?.progressToken;
-        let progressBroken = false;
-        const onProgress =
-          progressToken == null
-            ? undefined
-            : async (progress: number, message: string): Promise<void> => {
-                if (progressBroken) return;
-                try {
-                  await extra.sendNotification({
-                    method: "notifications/progress",
-                    params: { progressToken, progress, message },
-                  });
-                } catch (error) {
-                  progressBroken = true;
-                  logger.error(error);
-                }
-              };
+        const onProgress = createProgressNotifier(extra, logger);
 
         let outcome: RunOutcome;
         if (runId != null) {
@@ -609,21 +725,15 @@ export function registerAgentRunTool(
             progressTimeoutMs: options?.progressTimeoutMs,
           });
         } else {
-          const runInput: AgentRunInput = {
+          const runInput = buildAgentRunInput({
             query: query as string,
-            ...(systemPrompt != null ? { systemPrompt } : {}),
-            ...(outputSchema != null ? { outputSchema } : {}),
-            ...(input != null ? { input } : {}),
-            ...(dataSources != null
-              ? {
-                  dataSources: dataSources.flatMap(({ provider }) =>
-                    provider != null ? [{ provider }] : [],
-                  ),
-                }
-              : {}),
-            ...(previousRunId != null ? { previousRunId } : {}),
-            effort: (effort ?? "low") as AgentEffort,
-          };
+            systemPrompt,
+            outputSchema,
+            input,
+            dataSources,
+            previousRunId,
+            effort,
+          });
 
           checkpoint("agent_run_request_prepared", {
             hasSchema: outputSchema != null,

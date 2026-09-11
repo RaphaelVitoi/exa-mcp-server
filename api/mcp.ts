@@ -152,8 +152,8 @@ function initializeRateLimiters(): Promise<boolean> {
         token: redisToken,
       });
 
-      const qpsLimit = parseInt(process.env.RATE_LIMIT_QPS || "2", 10);
-      const dailyLimit = parseInt(process.env.RATE_LIMIT_DAILY || "50", 10);
+      const qpsLimit = Number.parseInt(process.env.RATE_LIMIT_QPS || "2", 10);
+      const dailyLimit = Number.parseInt(process.env.RATE_LIMIT_DAILY || "50", 10);
       qpsLimiter = new Ratelimit({
         redis: redisClient,
         limiter: Ratelimit.slidingWindow(qpsLimit, "1 s"),
@@ -393,14 +393,12 @@ async function checkRateLimits(
 
 /** Extract bearer token from Authorization header. */
 function getBearerToken(request: Request): string | undefined {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader) {
-    const match = authHeader.match(/^Bearer\s+(.+)$/i);
-    if (match && match[1]) {
-      return match[1];
-    }
-  }
-  return undefined;
+  // (\S.*) em vez de (.+): \s+ e .+ se sobrepoem em espaco, e essa ambiguidade
+  // e o backtracking super-linear. Exigir nao-branco no primeiro caractere da
+  // captura fixa a fronteira. Efeito colateral desejado: "Bearer    " deixa de
+  // devolver um token composto so de espaco, que o teste antigo aceitava.
+  const match = /^Bearer\s+(\S.*)$/i.exec(request.headers.get("authorization") ?? "");
+  return match?.[1];
 }
 
 /**
@@ -425,138 +423,145 @@ interface RequestConfig {
   mcpMaxDurationSeconds?: number;
 }
 
+type SearchType = "auto" | "fast" | "instant";
+
+type AuthResolution = {
+  exaApiKey?: string;
+  userProvidedApiKey: boolean;
+  authMethod: "oauth" | "api_key" | "free_tier";
+  oauthAccessToken?: string;
+  invalidOAuthJwt: boolean;
+  /** Nenhuma credencial veio em header -- unica situacao que libera a chave por query string. */
+  headerCredentialAbsent: boolean;
+};
+
+/**
+ * Resolve a credencial apresentada em header.
+ * Prioridade: x-api-key > JWT OAuth > API key simples no Bearer.
+ * Cada ramo e terminal, por isso sao retornos e nao atribuicoes sobre um acumulador.
+ */
+async function resolveHeaderAuth(request: Request): Promise<AuthResolution> {
+  const envKey = process.env.EXA_API_KEY;
+
+  const xApiKey = request.headers.get("x-api-key");
+  if (xApiKey) {
+    return {
+      exaApiKey: xApiKey,
+      userProvidedApiKey: true,
+      authMethod: "api_key",
+      invalidOAuthJwt: false,
+      headerCredentialAbsent: false,
+    };
+  }
+
+  const bearerToken = getBearerToken(request);
+  if (!bearerToken) {
+    return {
+      exaApiKey: envKey,
+      userProvidedApiKey: false,
+      authMethod: "free_tier",
+      invalidOAuthJwt: false,
+      headerCredentialAbsent: true,
+    };
+  }
+
+  if (!isJwtToken(bearerToken)) {
+    return {
+      exaApiKey: bearerToken,
+      userProvidedApiKey: true,
+      authMethod: "api_key",
+      invalidOAuthJwt: false,
+      headerCredentialAbsent: false,
+    };
+  }
+
+  if (await verifyOAuthToken(bearerToken)) {
+    return {
+      exaApiKey: undefined,
+      userProvidedApiKey: true,
+      authMethod: "oauth",
+      oauthAccessToken: bearerToken,
+      invalidOAuthJwt: false,
+      headerCredentialAbsent: false,
+    };
+  }
+
+  // JWT que nao verifica NAO cai em silencio para a env key nem para o free tier:
+  // a flag existe para o chamador devolver 401 com WWW-Authenticate.
+  console.error("[EXA-MCP] Invalid OAuth JWT token");
+  return {
+    exaApiKey: envKey,
+    userProvidedApiKey: false,
+    authMethod: "free_tier",
+    invalidOAuthJwt: true,
+    headerCredentialAbsent: false,
+  };
+}
+
+function parseToolSelection(raw: string | null | undefined): ToolId[] | undefined {
+  if (!raw) return undefined;
+  return expandToolSelection(
+    raw
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+}
+
+function asSearchType(value: string | null | undefined): SearchType | undefined {
+  return value === "auto" || value === "fast" || value === "instant" ? value : undefined;
+}
+
+type UrlOverrides = {
+  exaApiKey?: string;
+  enabledTools?: ToolId[];
+  debug?: boolean;
+  defaultSearchType?: SearchType;
+  agentCallWindowMs?: number;
+};
+
+function readUrlOverrides(request: Request, debug: boolean): UrlOverrides {
+  try {
+    const params = new URL(request.url).searchParams;
+    return {
+      exaApiKey: params.get("exaApiKey") || undefined,
+      enabledTools: parseToolSelection(params.get("tools")),
+      debug: params.has("debug") ? params.get("debug") === "true" : undefined,
+      defaultSearchType: asSearchType(params.get("defaultSearchType")),
+      agentCallWindowMs: parsePositiveInteger(params.get("agentCallWindowMs") ?? undefined),
+    };
+  } catch (error) {
+    // URL invalida nao e fatal: o restante da configuracao vem de header e env.
+    if (debug) console.error("Failed to parse request URL:", error);
+    return {};
+  }
+}
+
 /**
  * Extract configuration from request headers, URL, or environment variables.
  * Priority: x-api-key header > OAuth JWT > plain Bearer API key > query parameter > environment variable.
  */
 async function getConfigFromRequest(request: Request): Promise<RequestConfig> {
-  let exaApiKey = process.env.EXA_API_KEY;
-  let enabledTools: ToolId[] | undefined;
-  let debug = process.env.DEBUG === "true";
-  let userProvidedApiKey = false;
-  let authMethod: "oauth" | "api_key" | "free_tier" = "free_tier";
-  let defaultSearchType: "auto" | "fast" | "instant" | undefined;
-  let oauthAccessToken: string | undefined;
-  let invalidOAuthJwt = false;
-  let agentCallWindowMs: number | undefined;
+  const auth = await resolveHeaderAuth(request);
+  const envDebug = process.env.DEBUG === "true";
+  const url = readUrlOverrides(request, envDebug);
 
-  // 1. Check x-api-key header (highest priority)
-  const xApiKey = request.headers.get("x-api-key");
-  if (xApiKey) {
-    exaApiKey = xApiKey;
-    userProvidedApiKey = true;
-    authMethod = "api_key";
-  }
-
-  // 2. Check Authorization: Bearer header (fallback when no x-api-key)
-  if (!xApiKey) {
-    const bearerToken = getBearerToken(request);
-    if (bearerToken) {
-      // Distinguish JWT (OAuth) from plain API key
-      if (isJwtToken(bearerToken)) {
-        const claims = await verifyOAuthToken(bearerToken);
-        if (claims) {
-          oauthAccessToken = bearerToken;
-          exaApiKey = undefined;
-          userProvidedApiKey = true;
-          authMethod = "oauth";
-        } else {
-          // JWT verification failed — flag so the caller can return 401 with
-          // a WWW-Authenticate challenge instead of silently falling through to
-          // the env API key or free tier.
-          invalidOAuthJwt = true;
-          console.error("[EXA-MCP] Invalid OAuth JWT token");
-        }
-      } else {
-        // Plain API key in Bearer header
-        exaApiKey = bearerToken;
-        userProvidedApiKey = true;
-        authMethod = "api_key";
-      }
-    }
-  }
-
-  try {
-    const parsedUrl = new URL(request.url);
-    const params = parsedUrl.searchParams;
-
-    // 3. Check ?exaApiKey=YOUR_KEY (fallback for backwards compat, only if no header)
-    if (!xApiKey && !getBearerToken(request) && params.has("exaApiKey")) {
-      const keyFromUrl = params.get("exaApiKey");
-      if (keyFromUrl) {
-        exaApiKey = keyFromUrl;
-        userProvidedApiKey = true;
-        authMethod = "api_key";
-      }
-    }
-
-    // Support ?tools=tool1,tool2
-    if (params.has("tools")) {
-      const toolsParam = params.get("tools");
-      if (toolsParam) {
-        enabledTools = expandToolSelection(
-          toolsParam
-            .split(",")
-            .map((t) => t.trim())
-            .filter((t) => t.length > 0),
-        );
-      }
-    }
-
-    // Support ?debug=true
-    if (params.has("debug")) {
-      debug = params.get("debug") === "true";
-    }
-
-    // Support ?agentCallWindowMs
-    agentCallWindowMs = parsePositiveInteger(params.get("agentCallWindowMs") ?? undefined);
-
-    // Support ?defaultSearchType
-    if (params.has("defaultSearchType")) {
-      const dst = params.get("defaultSearchType");
-      if (dst === "auto" || dst === "fast" || dst === "instant") {
-        defaultSearchType = dst;
-      }
-    }
-  } catch (error) {
-    // URL parsing failed, will use env vars
-    if (debug) {
-      console.error("Failed to parse request URL:", error);
-    }
-  }
-
-  // Fall back to env vars if no query params were found
-  if (!enabledTools && process.env.ENABLED_TOOLS) {
-    enabledTools = expandToolSelection(
-      process.env.ENABLED_TOOLS.split(",")
-        .map((t) => t.trim())
-        .filter((t) => t.length > 0),
-    );
-  }
-
-  if (!defaultSearchType && process.env.DEFAULT_SEARCH_TYPE) {
-    const dst = process.env.DEFAULT_SEARCH_TYPE;
-    if (dst === "auto" || dst === "fast" || dst === "instant") {
-      defaultSearchType = dst;
-    }
-  }
-
-  const exaSource = request.headers.get("x-exa-source") || undefined;
-  const mcpSessionId = request.headers.get("MCP-Session-Id") || undefined;
+  const urlKeyApplies = auth.headerCredentialAbsent && url.exaApiKey !== undefined;
 
   return {
-    exaApiKey,
-    enabledTools,
-    debug,
-    userProvidedApiKey,
-    authMethod,
-    exaSource,
-    mcpSessionId,
-    defaultSearchType,
-    oauthAccessToken,
-    invalidOAuthJwt,
+    exaApiKey: urlKeyApplies ? url.exaApiKey : auth.exaApiKey,
+    enabledTools: url.enabledTools ?? parseToolSelection(process.env.ENABLED_TOOLS),
+    debug: url.debug ?? envDebug,
+    userProvidedApiKey: urlKeyApplies || auth.userProvidedApiKey,
+    authMethod: urlKeyApplies ? "api_key" : auth.authMethod,
+    exaSource: request.headers.get("x-exa-source") || undefined,
+    mcpSessionId: request.headers.get("MCP-Session-Id") || undefined,
+    defaultSearchType: url.defaultSearchType ?? asSearchType(process.env.DEFAULT_SEARCH_TYPE),
+    oauthAccessToken: auth.oauthAccessToken,
+    invalidOAuthJwt: auth.invalidOAuthJwt,
     mcpMaxDurationSeconds: parsePositiveInteger(process.env.MCP_MAX_DURATION_SECONDS),
-    agentCallWindowMs: agentCallWindowMs ?? parsePositiveInteger(process.env.AGENT_CALL_WINDOW_MS),
+    agentCallWindowMs:
+      url.agentCallWindowMs ?? parsePositiveInteger(process.env.AGENT_CALL_WINDOW_MS),
   };
 }
 
@@ -617,16 +622,14 @@ function create401Response(
   reason: "missing" | "invalid_token" = "missing",
   resourcePath: string = "mcp",
 ): Response {
-  const params: string[] = [];
-  if (reason === "invalid_token") {
-    params.push('error="invalid_token"');
-    params.push('error_description="The access token is invalid or expired"');
-  }
-  // RFC 9728: metadata lives at /.well-known/oauth-protected-resource/<resource path>,
-  // and its `resource` field must exactly match the URL the client connected to.
-  params.push(
+  const params: string[] = [
+    ...(reason === "invalid_token"
+      ? ['error="invalid_token"', 'error_description="The access token is invalid or expired"']
+      : []),
+    // RFC 9728: metadata lives at /.well-known/oauth-protected-resource/<resource path>,
+    // and its `resource` field must exactly match the URL the client connected to.
     `resource_metadata="https://mcp.exa.ai/.well-known/oauth-protected-resource/${resourcePath}"`,
-  );
+  ];
 
   const message =
     reason === "invalid_token"
@@ -675,36 +678,42 @@ async function handleRequest(
   }
 }
 
-/**
- * Main request handler that extracts config from URL and creates
- * a fresh handler for each request
- */
-async function processRequest(
-  request: Request,
-  options?: { forceOAuth?: boolean; resourcePath?: string },
-): Promise<Response> {
-  const debug = process.env.DEBUG === "true";
-  const body = request.method === "POST" ? await request.clone().text() : undefined;
-  if (body !== undefined && declaresJsonBody(request) && !isParsableJson(body)) {
-    return createParseErrorResponse();
-  }
-  const isInitializeRequest = isInitializeMethod(body ?? "");
-  const initializeClientInfo = extractInitializeClientInfo(body);
+type RequestOptions = { forceOAuth?: boolean; resourcePath?: string };
+type InitializeClientInfo = ReturnType<typeof extractInitializeClientInfo>;
 
-  // Check user-agent bypass BEFORE the 401 gate so bypass clients never see auth prompts
-  const userAgent = request.headers.get("user-agent") || "";
+type RequestGate = {
+  bypassRateLimit: boolean;
+  bypassApiKey?: string;
+  requireOAuth: boolean;
+  resourcePath: string;
+};
+
+// Caminhos que o rewrite da Vercel entrega e que o mcp-handler so reconhece
+// como /api/mcp, que ele compara por url.pathname.
+const NORMALIZED_PATHS = new Set(["/mcp", "/", "/mcp/oauth", "/mcp-oauth", "/api/mcp-oauth"]);
+
+/**
+ * Decide se a requisicao exige OAuth e se ela passa pelo bypass por user-agent.
+ * O bypass e avaliado ANTES do portao de 401 para que clientes de bypass nunca
+ * vejam prompt de autenticacao.
+ */
+function evaluateAuthGate(
+  request: Request,
+  userAgent: string,
+  options?: RequestOptions,
+): RequestGate {
   const bypassPrefix = process.env.RATE_LIMIT_BYPASS;
   const bypassApiKey = process.env.EXA_API_KEY_BYPASS;
-  const bypassRateLimit = bypassPrefix && bypassApiKey && userAgent.startsWith(bypassPrefix);
+  const bypassRateLimit = Boolean(
+    bypassPrefix && bypassApiKey && userAgent.startsWith(bypassPrefix),
+  );
 
-  // Check if user-agent matches OAUTH_USER_AGENTS (force OAuth on /mcp for these clients)
   const oauthUserAgents =
     process.env.OAUTH_USER_AGENTS?.split(",")
-      .map((s) => s.trim())
+      .map((entry) => entry.trim())
       .filter(Boolean) || [];
   const userAgentMatchesOAuth = oauthUserAgents.some((ua) => userAgent.includes(ua));
 
-  // Check if request is from a plugin client (force OAuth for plugin users)
   const requestUrl = new URL(request.url);
   const isPluginClient = requestUrl.searchParams.get("client")?.includes("plugin") ?? false;
 
@@ -713,149 +722,185 @@ async function processRequest(
     loginParam !== null &&
     (loginParam === "" || ["1", "true", "yes"].includes(loginParam.toLowerCase()));
 
-  // Gate: require auth for the dedicated /mcp/oauth endpoint, ?login opt-in,
-  // matching user agents, or plugin clients (unless bypassed).
-  const requireOAuth = options?.forceOAuth || userAgentMatchesOAuth || isPluginClient || wantsLogin;
-  const resourcePath = options?.resourcePath ?? "mcp";
-  if (!bypassRateLimit && requireOAuth && !hasAuth(request)) {
-    return create401Response("missing", resourcePath);
+  return {
+    bypassRateLimit,
+    bypassApiKey,
+    requireOAuth: Boolean(
+      options?.forceOAuth || userAgentMatchesOAuth || isPluginClient || wantsLogin,
+    ),
+    resourcePath: options?.resourcePath ?? "mcp",
+  };
+}
+
+function logRequestConfig(request: Request, config: RequestConfig): void {
+  if (!config.debug) return;
+  console.log(`[EXA-MCP] Request URL: ${request.url}`);
+  console.log(`[EXA-MCP] Enabled tools: ${config.enabledTools?.join(", ") || "default"}`);
+  console.log(`[EXA-MCP] Auth method: ${config.authMethod}`);
+  console.log(
+    `[EXA-MCP] API key provided: ${config.userProvidedApiKey ? "yes" : "no (using env var)"}`,
+  );
+}
+
+// Usuario de bypass roda com chave propria do servico e segue marcado como
+// NAO-fornecedor de chave, para continuar sujeito a contabilidade.
+function applyBypassKey(
+  config: RequestConfig,
+  request: Request,
+  gate: RequestGate,
+  userAgent: string,
+): void {
+  if (!gate.bypassRateLimit || config.userProvidedApiKey) return;
+
+  config.exaApiKey = gate.bypassApiKey;
+  config.userProvidedApiKey = false;
+
+  const clientIp = getClientIp(request);
+  if (clientIp) {
+    saveBypassRequestInfo(clientIp, userAgent, config.debug);
+  } else if (config.debug) {
+    console.log("[EXA-MCP] Skipping bypass request info save: trusted client IP unavailable");
+  }
+}
+
+/** Devolve a resposta 429 quando o limite estoura, ou null quando a chamada segue. */
+async function enforceRateLimit(
+  request: Request,
+  config: RequestConfig,
+  body: string | undefined,
+): Promise<Response | null> {
+  if (config.userProvidedApiKey || request.method !== "POST") return null;
+
+  // Apenas tools/call conta: metodos de protocolo como tools/list nao gastam cota.
+  const rateLimitedCallCount = countRateLimitedCalls(body ?? "");
+  if (rateLimitedCallCount === 0) {
+    if (config.debug) console.log(`[EXA-MCP] Skipping rate limit for non-tool-call method`);
+    return null;
   }
 
-  // Extract configuration from request headers, URL, and env vars
-  const config = await getConfigFromRequest(request);
-
-  // A Bearer JWT that fails verification (expired, bad signature, wrong issuer/audience)
-  // must produce a 401 + WWW-Authenticate challenge so the client knows to refresh or
-  // re-authenticate. Falling through to the env API key or free tier would mask the
-  // expired-credential signal and prevent the client's refresh flow from triggering.
-  // Use the `invalid_token` reason so the WWW-Authenticate header carries the standard
-  // OAuth error code that clients listen for when deciding to exchange a refresh token.
-  if (config.invalidOAuthJwt) {
-    return create401Response("invalid_token", resourcePath);
-  }
-
-  if (!config.userProvidedApiKey && config.enabledTools?.some(requiresUserProvidedApiKey)) {
-    return create401Response("missing", resourcePath);
-  }
-
-  const storedMcpClient = isInitializeRequest
-    ? undefined
-    : await loadMcpClientMetadata(config.mcpSessionId, config.debug);
-  config.mcpClient = buildMcpClientMetadata({
-    source: config.exaSource,
-    sessionId: config.mcpSessionId,
-    clientInfo: initializeClientInfo,
-    stored: storedMcpClient,
-    userAgent,
-  });
-
+  await initializeRateLimiters();
+  const clientIp = getClientIp(request);
   if (config.debug) {
-    console.log(`[EXA-MCP] Request URL: ${request.url}`);
-    console.log(`[EXA-MCP] Enabled tools: ${config.enabledTools?.join(", ") || "default"}`);
-    console.log(`[EXA-MCP] Auth method: ${config.authMethod}`);
     console.log(
-      `[EXA-MCP] API key provided: ${config.userProvidedApiKey ? "yes" : "no (using env var)"}`,
+      `[EXA-MCP] Client IP: ${clientIp ?? "unavailable"}, tools/call count: ${rateLimitedCallCount}`,
     );
   }
 
-  // Use separate API key for bypass users and save their IP/user-agent for tracking
-  if (bypassRateLimit && !config.userProvidedApiKey) {
-    config.exaApiKey = bypassApiKey;
-    config.userProvidedApiKey = false;
-    const clientIp = getClientIp(request);
-    if (clientIp) {
-      saveBypassRequestInfo(clientIp, userAgent, config.debug);
-    } else if (config.debug) {
-      console.log("[EXA-MCP] Skipping bypass request info save: trusted client IP unavailable");
-    }
-  }
+  return (await checkRateLimits(clientIp, rateLimitedCallCount, config.debug)) ?? null;
+}
 
-  // Rate limit users who didn't provide their own API key (including bypass users)
-  // Only rate limit actual tool calls (tools/call), not protocol methods like tools/list
-  if (!config.userProvidedApiKey && request.method === "POST") {
-    // Only rate limit actual tool calls, not protocol methods
-    const rateLimitedCallCount = countRateLimitedCalls(body ?? "");
-    if (rateLimitedCallCount > 0) {
-      // Initialize rate limiters on first request (lazy init)
-      await initializeRateLimiters();
-
-      const clientIp = getClientIp(request);
-
-      if (config.debug) {
-        console.log(
-          `[EXA-MCP] Client IP: ${clientIp ?? "unavailable"}, tools/call count: ${rateLimitedCallCount}`,
-        );
-      }
-
-      const rateLimitResponse = await checkRateLimits(clientIp, rateLimitedCallCount, config.debug);
-      if (rateLimitResponse) {
-        return rateLimitResponse;
-      }
-    } else if (config.debug) {
-      console.log(`[EXA-MCP] Skipping rate limit for non-tool-call method`);
-    }
-  }
-
-  // Create a fresh handler for this request's configuration
-  const handler = createHandler(config);
-
-  // Normalize URL pathname to /api/mcp for mcp-handler (it checks url.pathname)
-  // This handles requests from /mcp and / rewrites
+/**
+ * Remove as credenciais antes de repassar ao mcp-handler.
+ * O Agnost (trackMCP) envolve o transporte e captura headers, query params e a URL
+ * inteira de toda requisicao. Sem esta limpeza, a chave do usuario vinda de
+ * x-api-key ou ?exaApiKey= chegaria ao endpoint externo de analytics. A chave ja
+ * foi extraida para `config`, entao as ferramentas continuam com acesso a ela.
+ */
+function sanitizeForwardedRequest(request: Request, body: string | undefined): Request {
   const url = new URL(request.url);
-  if (
-    url.pathname === "/mcp" ||
-    url.pathname === "/" ||
-    url.pathname === "/mcp/oauth" ||
-    url.pathname === "/mcp-oauth" ||
-    url.pathname === "/api/mcp-oauth"
-  ) {
+  if (NORMALIZED_PATHS.has(url.pathname)) {
     url.pathname = "/api/mcp";
   }
-
-  // Strip sensitive credentials from the request before passing to the MCP handler.
-  // Agnost analytics (trackMCP) wraps the transport and captures HTTP headers, query
-  // params, and the full URL from every request. Without sanitization, user API keys
-  // sent via x-api-key header or ?exaApiKey= query param would be forwarded to the
-  // external analytics endpoint. The API key has already been extracted into `config`
-  // above, so tools still have access to it — we just prevent it from leaking.
   url.searchParams.delete("exaApiKey");
+
   const sanitizedHeaders = new Headers(request.headers);
   sanitizedHeaders.delete("x-api-key");
   sanitizedHeaders.delete("authorization");
-  request = new Request(url.toString(), {
+
+  return new Request(url.toString(), {
     method: request.method,
     headers: sanitizedHeaders,
     body,
     signal: request.signal,
   });
+}
 
-  const response = withCors(await handler(request));
+async function attachSessionId(
+  response: Response,
+  config: RequestConfig,
+  initializeClientInfo: InitializeClientInfo,
+  userAgent: string,
+): Promise<Response> {
+  const responseSessionId =
+    response.headers.get("Mcp-Session-Id") ?? config.mcpSessionId ?? randomUUID();
 
-  if (isInitializeRequest && response.ok) {
-    const responseSessionId =
-      response.headers.get("Mcp-Session-Id") ?? config.mcpSessionId ?? randomUUID();
-    const metadata = buildMcpClientMetadata({
+  await saveMcpClientMetadata(
+    responseSessionId,
+    buildMcpClientMetadata({
       source: config.exaSource,
       sessionId: responseSessionId,
       clientInfo: initializeClientInfo,
       userAgent,
-    });
-    await saveMcpClientMetadata(responseSessionId, metadata, config.debug);
+    }),
+    config.debug,
+  );
 
-    if (response.headers.has("Mcp-Session-Id")) {
-      return response;
-    }
+  if (response.headers.has("Mcp-Session-Id")) return response;
 
-    const headers = new Headers(response.headers);
-    headers.set("Mcp-Session-Id", responseSessionId);
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
+  const headers = new Headers(response.headers);
+  headers.set("Mcp-Session-Id", responseSessionId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+/**
+ * Main request handler that extracts config from URL and creates
+ * a fresh handler for each request
+ */
+async function processRequest(request: Request, options?: RequestOptions): Promise<Response> {
+  const body = request.method === "POST" ? await request.clone().text() : undefined;
+  if (body !== undefined && declaresJsonBody(request) && !isParsableJson(body)) {
+    return createParseErrorResponse();
   }
 
-  return response;
+  const isInitializeRequest = isInitializeMethod(body ?? "");
+  const initializeClientInfo = extractInitializeClientInfo(body);
+  const userAgent = request.headers.get("user-agent") || "";
+
+  const gate = evaluateAuthGate(request, userAgent, options);
+  if (!gate.bypassRateLimit && gate.requireOAuth && !hasAuth(request)) {
+    return create401Response("missing", gate.resourcePath);
+  }
+
+  const config = await getConfigFromRequest(request);
+
+  // Um Bearer JWT que falha verificacao (expirado, assinatura ruim, issuer/audience
+  // errado) precisa produzir 401 + WWW-Authenticate para o cliente saber que deve
+  // renovar. Cair para a env key ou para o free tier mascararia o sinal de
+  // credencial expirada e impediria o fluxo de refresh do cliente de disparar.
+  if (config.invalidOAuthJwt) {
+    return create401Response("invalid_token", gate.resourcePath);
+  }
+
+  if (!config.userProvidedApiKey && config.enabledTools?.some(requiresUserProvidedApiKey)) {
+    return create401Response("missing", gate.resourcePath);
+  }
+
+  config.mcpClient = buildMcpClientMetadata({
+    source: config.exaSource,
+    sessionId: config.mcpSessionId,
+    clientInfo: initializeClientInfo,
+    stored: isInitializeRequest
+      ? undefined
+      : await loadMcpClientMetadata(config.mcpSessionId, config.debug),
+    userAgent,
+  });
+
+  logRequestConfig(request, config);
+  applyBypassKey(config, request, gate, userAgent);
+
+  const rateLimited = await enforceRateLimit(request, config, body);
+  if (rateLimited) return rateLimited;
+
+  const handler = createHandler(config);
+  const response = withCors(await handler(sanitizeForwardedRequest(request, body)));
+
+  return isInitializeRequest && response.ok
+    ? attachSessionId(response, config, initializeClientInfo, userAgent)
+    : response;
 }
 
 function handleOptions(): Response {
