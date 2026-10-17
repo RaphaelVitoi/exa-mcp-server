@@ -100,7 +100,7 @@ function registerPromptsAndResources(
   server: any,
   registeredTools: string[],
 ) {
-  server.prompt("web_search_help", "Get help with web search using Exa", {}, async () => ({
+  server.prompt("web_search_help", "Get help with web search using Exa", {}, () => ({
     messages: [
       {
         role: "user",
@@ -118,7 +118,7 @@ function registerPromptsAndResources(
     "tools_list",
     "exa://tools/list",
     { mimeType: "application/json", description: "List of available Exa tools and their descriptions" },
-    async () => ({
+    () => ({
       contents: [{ uri: "exa://tools/list", text: JSON.stringify(listToolMetadata(registeredTools), null, 2), mimeType: "application/json" }],
     }),
   );
@@ -134,7 +134,7 @@ function registerPromptsAndResources(
       {
         task: z.string().optional().describe("The research task to turn into an Exa Agent run"),
       },
-      async (args?: { task?: string }) => {
+      (args?: { task?: string }) => {
         const task = args?.task?.trim();
         const taskLine = task
           ? `My research task:\n\n${task}`
@@ -152,7 +152,7 @@ function registerPromptsAndResources(
       "agent_research_guide",
       "exa://agent/skill",
       { mimeType: "text/markdown", description: "Exa Agent research workflow, schema rules, and coverage guidance" },
-      async () => ({
+      () => ({
         contents: [{ uri: "exa://agent/skill", text: agentSkillContent, mimeType: "text/markdown" }],
       }),
     );
@@ -161,7 +161,7 @@ function registerPromptsAndResources(
       "agent_schema_templates",
       "exa://agent/schema-templates",
       { mimeType: "application/json", description: "Starter JSON Schema templates for common Agent workflows" },
-      async () => ({
+      () => ({
         contents: [{ uri: "exa://agent/schema-templates", text: JSON.stringify(agentSchemaTemplates, null, 2), mimeType: "application/json" }],
       }),
     );

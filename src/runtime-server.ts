@@ -7,7 +7,7 @@ const PORT = Number(process.env.PORT || 8000);
 
 type Handler = (request: Request) => Promise<Response> | Response;
 
-async function toRequest(request: IncomingMessage, body: Buffer): Promise<Request> {
+function toRequest(request: IncomingMessage, body: Buffer): Request {
   const headers = new Headers();
   for (const [name, value] of Object.entries(request.headers)) {
     if (Array.isArray(value)) {
@@ -91,7 +91,7 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    const webRequest = await toRequest(request, await readBody(request));
+    const webRequest = toRequest(request, await readBody(request));
     await writeResponse(await handler(webRequest), response);
   } catch (error) {
     console.error("[EXA-MCP] Runtime request failed:", error);

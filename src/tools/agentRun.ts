@@ -457,19 +457,19 @@ export async function pollAgentRun(params: {
   let run: AgentRun | null = null;
   let updateCount = 0;
 
-  const finish = async (
+  const finish = (
     status: RunOutcomeStatus,
     handoffReason?: HandoffReason,
   ): Promise<RunOutcome> => {
     interrupt.cleanup();
-    return {
+    return Promise.resolve({
       status,
       terminalEvent: null,
       run,
       eventCount: updateCount,
       runId: params.runId,
       ...(handoffReason != null ? { handoffReason } : {}),
-    };
+    });
   };
 
   if (params.signal?.aborted) return finish("running");

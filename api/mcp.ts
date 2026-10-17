@@ -757,7 +757,7 @@ function applyBypassKey(
 
   const clientIp = getClientIp(request);
   if (clientIp) {
-    saveBypassRequestInfo(clientIp, userAgent, config.debug);
+    void saveBypassRequestInfo(clientIp, userAgent, config.debug);
   } else if (config.debug) {
     console.log("[EXA-MCP] Skipping bypass request info save: trusted client IP unavailable");
   }

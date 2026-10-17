@@ -84,9 +84,27 @@ export class FakeMcpServer {
     const handler = getLastArg<RegisteredResource["handler"]>(args);
     const metadata = args.length >= 4 ? args[2] : undefined;
 
+    const resourceName =
+      typeof name === "string"
+        ? name
+        : typeof name === "object" && name !== null && "name" in name && typeof (name as { name: unknown }).name === "string"
+          ? (name as { name: string }).name
+          : name != null && typeof name !== "object"
+            ? String(name)
+            : "";
+
+    const resourceUri =
+      typeof uri === "string"
+        ? uri
+        : typeof uri === "object" && uri !== null && "href" in uri && typeof (uri as { href: unknown }).href === "string"
+          ? (uri as { href: string }).href
+          : uri != null && typeof uri !== "object"
+            ? String(uri)
+            : "";
+
     this.resources.push({
-      name: String(name),
-      uri: String(uri),
+      name: resourceName,
+      uri: resourceUri,
       metadata,
       handler,
     });

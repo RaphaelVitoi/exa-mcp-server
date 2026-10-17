@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 /**
  * Simple logging utility for MCP server
  */
@@ -6,7 +8,7 @@ export const log = (message: string): void => {
 };
 
 export const createRequestLogger = (toolName: string) => {
-  const requestId = `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const requestId = `${toolName}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   return {
     log: (message: string): void => {
       log(`[${requestId}] [${toolName}] ${message}`);

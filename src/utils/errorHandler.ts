@@ -1,3 +1,4 @@
+/* eslint-disable no-await-in-loop */
 /**
  * Error handling utilities for Exa MCP server.
  * Provides retry logic, enriched error messages, and rate limit detection.
