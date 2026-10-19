@@ -7,6 +7,15 @@ on:
     paths:
       - package.json
   workflow_dispatch:
+    inputs:
+      ecr_repository_uri:
+        description: 'ECR Repository URI'
+        required: false
+        default: ''
+      aws_role_arn:
+        description: 'AWS Role ARN'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -18,19 +27,27 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AWS_REGION: us-east-1
-      ECR_REPOSITORY_URI: ${{ vars.AGENTCORE_ECR_REPOSITORY_URI }}
-      AWS_ROLE_ARN: ${{ secrets.AGENTCORE_AWS_ROLE_ARN }}
+      AWS_ROLE_ARN: ""
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Validate release configuration
+        env:
+          INPUT_ECR_URI: ${{ inputs.ecr_repository_uri }}
+          INPUT_ROLE_ARN: ${{ inputs.aws_role_arn }}
         run: |
           set -euo pipefail
 
-          : "${ECR_REPOSITORY_URI:?Set the AGENTCORE_ECR_REPOSITORY_URI repository variable}"
-          : "${AWS_ROLE_ARN:?Set the AGENTCORE_AWS_ROLE_ARN repository secret}"
+          ECR_REPOSITORY_URI="${INPUT_ECR_URI:-${AGENTCORE_ECR_REPOSITORY_URI:-}}"
+          AWS_ROLE_ARN="${INPUT_ROLE_ARN:-${AGENTCORE_AWS_ROLE_ARN:-}}"
+
+          : "${ECR_REPOSITORY_URI:?Set the AGENTCORE_ECR_REPOSITORY_URI repository variable or input}"
+          : "${AWS_ROLE_ARN:?Set the AGENTCORE_AWS_ROLE_ARN repository secret or input}"
+
+          echo "ECR_REPOSITORY_URI=${ECR_REPOSITORY_URI}" >> "${GITHUB_ENV}"
+          echo "AWS_ROLE_ARN=${AWS_ROLE_ARN}" >> "${GITHUB_ENV}"
 
           version="$(node -p "require('./package.json').version")"
 
@@ -59,7 +76,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ secrets.AGENTCORE_AWS_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
 
       - name: Check for existing Marketplace image
         id: check-existing-image
