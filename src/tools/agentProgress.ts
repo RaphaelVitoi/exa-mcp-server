@@ -225,8 +225,7 @@ function handleOutputItem({ state, data, now, eventName }: ProgressContext): Age
   if (keys.key === undefined) return { state, kind: "ignored" };
 
   const name = stringValue(item?.name) ?? "tool";
-  const existing =
-    adoptNestedActivity(state, keys) ??
+  const existing = adoptNestedActivity(state, keys) ??
     state.toolsByCallId.get(keys.key) ?? { name, started: false, finished: false };
   existing.name = name;
   if (isDone) existing.finished = true;

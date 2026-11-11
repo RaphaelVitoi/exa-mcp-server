@@ -14,41 +14,39 @@ import {
 import { checkpoint } from "agnost";
 
 const deepSearchInputShape = {
-      objective: lenientString().describe(
-        "Natural language description of what the web search is looking for. Try to make the search query atomic - looking for a specific piece of information.",
-      ),
-      search_queries: z
-        .array(z.string())
-        .optional()
-        .describe(
-          "Optional list of keyword search queries related to the objective. Limited to 5 entries of up to 5 words each (~200 characters).",
-        ),
-      type: z
-        .enum(["deep", "deep-reasoning"])
-        .optional()
-        .describe(
-          "Search depth - 'deep': fast deep search (4-12s, default), 'deep-reasoning': thorough with reasoning (12-50s)",
-        ),
-      numResults: lenientOptionalNumber().describe(
-        "Number of search results to return (default: 8)",
-      ),
-      highlightMaxCharacters: lenientOptionalPositiveNumber().describe(
-        "Maximum characters for highlights per result (default: 4000)",
-      ),
-      outputSchema: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe(
-          "JSON schema for structured output. Must include a 'type' field set to 'object' or 'text'. For 'object' type, optionally include 'properties' and 'required'. Max 10 total properties, max nesting depth 2. When provided, automatically enables structured output mode.",
-        ),
-      systemPrompt: z
-        .string()
-        .max(32000)
-        .optional()
-        .describe("Instructions for how the deep search agent should process and format results."),
-      structuredOutput: lenientOptionalBoolean().describe(
-        "When true, returns a structured JSON response instead of markdown. The API will determine the appropriate structure based on the query. Prefer using outputSchema for more control over the response shape.",
-      ),
+  objective: lenientString().describe(
+    "Natural language description of what the web search is looking for. Try to make the search query atomic - looking for a specific piece of information.",
+  ),
+  search_queries: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Optional list of keyword search queries related to the objective. Limited to 5 entries of up to 5 words each (~200 characters).",
+    ),
+  type: z
+    .enum(["deep", "deep-reasoning"])
+    .optional()
+    .describe(
+      "Search depth - 'deep': fast deep search (4-12s, default), 'deep-reasoning': thorough with reasoning (12-50s)",
+    ),
+  numResults: lenientOptionalNumber().describe("Number of search results to return (default: 8)"),
+  highlightMaxCharacters: lenientOptionalPositiveNumber().describe(
+    "Maximum characters for highlights per result (default: 4000)",
+  ),
+  outputSchema: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      "JSON schema for structured output. Must include a 'type' field set to 'object' or 'text'. For 'object' type, optionally include 'properties' and 'required'. Max 10 total properties, max nesting depth 2. When provided, automatically enables structured output mode.",
+    ),
+  systemPrompt: z
+    .string()
+    .max(32000)
+    .optional()
+    .describe("Instructions for how the deep search agent should process and format results."),
+  structuredOutput: lenientOptionalBoolean().describe(
+    "When true, returns a structured JSON response instead of markdown. The API will determine the appropriate structure based on the query. Prefer using outputSchema for more control over the response shape.",
+  ),
 };
 
 type DeepSearchConfig = { exaApiKey?: string; userProvidedApiKey?: boolean };

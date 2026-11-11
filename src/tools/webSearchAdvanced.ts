@@ -14,109 +14,107 @@ import {
 import { checkpoint } from "agnost";
 
 const webSearchAdvancedInputShape = {
-      query: lenientString().describe("Search query - can be a question, statement, or keywords"),
-      numResults: lenientOptionalNumber().describe("Number of results (1-100, default: 10)"),
-      type: z
-        .enum(["auto", "fast", "instant"])
-        .optional()
-        .describe(
-          "Search type - 'auto': high quality and works with all filters (recommended), 'fast': quick results, 'instant': fastest results",
-        ),
+  query: lenientString().describe("Search query - can be a question, statement, or keywords"),
+  numResults: lenientOptionalNumber().describe("Number of results (1-100, default: 10)"),
+  type: z
+    .enum(["auto", "fast", "instant"])
+    .optional()
+    .describe(
+      "Search type - 'auto': high quality and works with all filters (recommended), 'fast': quick results, 'instant': fastest results",
+    ),
 
-      category: z
-        .enum([
-          "company",
-          "publication",
-          "news",
-          "pdf",
-          "github",
-          "personal site",
-          "people",
-          "financial report",
-        ])
-        .optional()
-        .describe("Filter results to a specific category"),
+  category: z
+    .enum([
+      "company",
+      "publication",
+      "news",
+      "pdf",
+      "github",
+      "personal site",
+      "people",
+      "financial report",
+    ])
+    .optional()
+    .describe("Filter results to a specific category"),
 
-      includeDomains: z
-        .array(z.string())
-        .optional()
-        .describe("Only include results from these domains (e.g., ['arxiv.org', 'github.com'])"),
-      excludeDomains: z.array(z.string()).optional().describe("Exclude results from these domains"),
+  includeDomains: z
+    .array(z.string())
+    .optional()
+    .describe("Only include results from these domains (e.g., ['arxiv.org', 'github.com'])"),
+  excludeDomains: z.array(z.string()).optional().describe("Exclude results from these domains"),
 
-      startPublishedDate: z
-        .string()
-        .optional()
-        .describe("Only include results published after this date (ISO 8601: YYYY-MM-DD)"),
-      endPublishedDate: z
-        .string()
-        .optional()
-        .describe("Only include results published before this date (ISO 8601: YYYY-MM-DD)"),
-      startCrawlDate: z
-        .string()
-        .optional()
-        .describe("Only include results crawled after this date (ISO 8601: YYYY-MM-DD)"),
-      endCrawlDate: z
-        .string()
-        .optional()
-        .describe("Only include results crawled before this date (ISO 8601: YYYY-MM-DD)"),
+  startPublishedDate: z
+    .string()
+    .optional()
+    .describe("Only include results published after this date (ISO 8601: YYYY-MM-DD)"),
+  endPublishedDate: z
+    .string()
+    .optional()
+    .describe("Only include results published before this date (ISO 8601: YYYY-MM-DD)"),
+  startCrawlDate: z
+    .string()
+    .optional()
+    .describe("Only include results crawled after this date (ISO 8601: YYYY-MM-DD)"),
+  endCrawlDate: z
+    .string()
+    .optional()
+    .describe("Only include results crawled before this date (ISO 8601: YYYY-MM-DD)"),
 
-      includeText: z
-        .array(z.string())
-        .optional()
-        .describe("Only include results containing ALL of these text strings"),
-      excludeText: z
-        .array(z.string())
-        .optional()
-        .describe("Exclude results containing ANY of these text strings"),
+  includeText: z
+    .array(z.string())
+    .optional()
+    .describe("Only include results containing ALL of these text strings"),
+  excludeText: z
+    .array(z.string())
+    .optional()
+    .describe("Exclude results containing ANY of these text strings"),
 
-      userLocation: z
-        .string()
-        .optional()
-        .describe("ISO country code for geo-targeted results (e.g., 'US', 'GB', 'DE')"),
+  userLocation: z
+    .string()
+    .optional()
+    .describe("ISO country code for geo-targeted results (e.g., 'US', 'GB', 'DE')"),
 
-      moderation: lenientOptionalBoolean().describe("Filter out unsafe/inappropriate content"),
+  moderation: lenientOptionalBoolean().describe("Filter out unsafe/inappropriate content"),
 
-      additionalQueries: z
-        .array(z.string())
-        .optional()
-        .describe("Additional query variations to expand search coverage"),
+  additionalQueries: z
+    .array(z.string())
+    .optional()
+    .describe("Additional query variations to expand search coverage"),
 
-      textMaxCharacters: lenientOptionalPositiveNumber().describe(
-        "Max characters for text extraction per result",
-      ),
-      contextMaxCharacters: lenientOptionalPositiveNumber().describe(
-        "Max characters for context string (not included by default)",
-      ),
+  textMaxCharacters: lenientOptionalPositiveNumber().describe(
+    "Max characters for text extraction per result",
+  ),
+  contextMaxCharacters: lenientOptionalPositiveNumber().describe(
+    "Max characters for context string (not included by default)",
+  ),
 
-      enableSummary: lenientOptionalBoolean().describe("Enable summary generation for results"),
-      summaryQuery: z.string().optional().describe("Focus query for summary generation"),
+  enableSummary: lenientOptionalBoolean().describe("Enable summary generation for results"),
+  summaryQuery: z.string().optional().describe("Focus query for summary generation"),
 
-      enableHighlights: lenientOptionalBoolean().describe("Enable highlights extraction"),
-      highlightsMaxCharacters: lenientOptionalNumber().describe(
-        "Maximum total characters across all highlights per URL. Preferred over highlightsNumSentences.",
-      ),
-      highlightsNumSentences: lenientOptionalNumber().describe(
-        "Deprecated: mapped to ~1333 chars/sentence. Use highlightsMaxCharacters instead.",
-      ),
-      highlightsPerUrl: lenientOptionalNumber().describe(
-        "Deprecated: currently ignored server-side. Use highlightsMaxCharacters instead.",
-      ),
-      highlightsQuery: z.string().optional().describe("Query for highlight relevance"),
+  enableHighlights: lenientOptionalBoolean().describe("Enable highlights extraction"),
+  highlightsMaxCharacters: lenientOptionalNumber().describe(
+    "Maximum total characters across all highlights per URL. Preferred over highlightsNumSentences.",
+  ),
+  highlightsNumSentences: lenientOptionalNumber().describe(
+    "Deprecated: mapped to ~1333 chars/sentence. Use highlightsMaxCharacters instead.",
+  ),
+  highlightsPerUrl: lenientOptionalNumber().describe(
+    "Deprecated: currently ignored server-side. Use highlightsMaxCharacters instead.",
+  ),
+  highlightsQuery: z.string().optional().describe("Query for highlight relevance"),
 
-      maxAgeHours: lenientOptionalNumber().describe(
-        "Maximum age of cached content in hours. 0 = always fetch fresh content, omit = use cached content with fresh fetch fallback",
-      ),
-      livecrawlTimeout: lenientOptionalNumber().describe(
-        "Timeout in milliseconds for fetching fresh content when maxAgeHours triggers a live fetch",
-      ),
+  maxAgeHours: lenientOptionalNumber().describe(
+    "Maximum age of cached content in hours. 0 = always fetch fresh content, omit = use cached content with fresh fetch fallback",
+  ),
+  livecrawlTimeout: lenientOptionalNumber().describe(
+    "Timeout in milliseconds for fetching fresh content when maxAgeHours triggers a live fetch",
+  ),
 
-      subpages: lenientOptionalNumber().describe(
-        "Number of subpages to crawl from each result (1-10)",
-      ),
-      subpageTarget: z
-        .array(z.string())
-        .optional()
-        .describe("Keywords to target when selecting subpages"),
+  subpages: lenientOptionalNumber().describe("Number of subpages to crawl from each result (1-10)"),
+  subpageTarget: z
+    .array(z.string())
+    .optional()
+    .describe("Keywords to target when selecting subpages"),
 };
 
 type AdvancedSearchParams = z.infer<z.ZodObject<typeof webSearchAdvancedInputShape>>;
@@ -133,9 +131,7 @@ function definedFields<T extends object>(fields: T): Partial<T> {
   ) as Partial<T>;
 }
 
-function buildAdvancedContents(
-  params: AdvancedSearchParams,
-): ExaAdvancedSearchRequest["contents"] {
+function buildAdvancedContents(params: AdvancedSearchParams): ExaAdvancedSearchRequest["contents"] {
   return {
     text: params.textMaxCharacters ? { maxCharacters: params.textMaxCharacters } : true,
     ...(params.maxAgeHours !== undefined

@@ -96,10 +96,7 @@ function registerTools(
   return registered;
 }
 
-function registerPromptsAndResources(
-  server: any,
-  registeredTools: string[],
-) {
+function registerPromptsAndResources(server: any, registeredTools: string[]) {
   server.prompt("web_search_help", "Get help with web search using Exa", {}, () => ({
     messages: [
       {
@@ -117,9 +114,18 @@ function registerPromptsAndResources(
   server.resource(
     "tools_list",
     "exa://tools/list",
-    { mimeType: "application/json", description: "List of available Exa tools and their descriptions" },
+    {
+      mimeType: "application/json",
+      description: "List of available Exa tools and their descriptions",
+    },
     () => ({
-      contents: [{ uri: "exa://tools/list", text: JSON.stringify(listToolMetadata(registeredTools), null, 2), mimeType: "application/json" }],
+      contents: [
+        {
+          uri: "exa://tools/list",
+          text: JSON.stringify(listToolMetadata(registeredTools), null, 2),
+          mimeType: "application/json",
+        },
+      ],
     }),
   );
 
@@ -141,8 +147,24 @@ function registerPromptsAndResources(
           : "Help me turn my research task into an Exa Agent run with a clear objective, bounded output schema, coverage plan, and follow-up strategy.";
         return {
           messages: [
-            { role: "user", content: { type: "text", text: `${taskLine}\n\nFollow the Exa Agent research guide below.` } },
-            { role: "user", content: { type: "resource", resource: { uri: "exa://agent/skill", mimeType: "text/markdown", text: agentSkillContent } } },
+            {
+              role: "user",
+              content: {
+                type: "text",
+                text: `${taskLine}\n\nFollow the Exa Agent research guide below.`,
+              },
+            },
+            {
+              role: "user",
+              content: {
+                type: "resource",
+                resource: {
+                  uri: "exa://agent/skill",
+                  mimeType: "text/markdown",
+                  text: agentSkillContent,
+                },
+              },
+            },
           ],
         };
       },
@@ -151,18 +173,32 @@ function registerPromptsAndResources(
     server.resource(
       "agent_research_guide",
       "exa://agent/skill",
-      { mimeType: "text/markdown", description: "Exa Agent research workflow, schema rules, and coverage guidance" },
+      {
+        mimeType: "text/markdown",
+        description: "Exa Agent research workflow, schema rules, and coverage guidance",
+      },
       () => ({
-        contents: [{ uri: "exa://agent/skill", text: agentSkillContent, mimeType: "text/markdown" }],
+        contents: [
+          { uri: "exa://agent/skill", text: agentSkillContent, mimeType: "text/markdown" },
+        ],
       }),
     );
 
     server.resource(
       "agent_schema_templates",
       "exa://agent/schema-templates",
-      { mimeType: "application/json", description: "Starter JSON Schema templates for common Agent workflows" },
+      {
+        mimeType: "application/json",
+        description: "Starter JSON Schema templates for common Agent workflows",
+      },
       () => ({
-        contents: [{ uri: "exa://agent/schema-templates", text: JSON.stringify(agentSchemaTemplates, null, 2), mimeType: "application/json" }],
+        contents: [
+          {
+            uri: "exa://agent/schema-templates",
+            text: JSON.stringify(agentSchemaTemplates, null, 2),
+            mimeType: "application/json",
+          },
+        ],
       }),
     );
   }

@@ -30,7 +30,7 @@ Important: Call deep_researcher_check with the returned research ID to get the r
             "Research model: 'exa-research-fast' (fastest, ~15s, good for simple queries), 'exa-research' (balanced, 15-45s, good for most queries), or 'exa-research-pro' (most comprehensive, 45s-3min, for complex topics). Default: exa-research-fast",
           ),
         outputSchema: z
-          .record(z.unknown())
+          .record(z.string(), z.unknown())
           .optional()
           .describe(
             "Optional JSON Schema for structured output. When provided, the research report will include a 'parsed' field with data matching this schema.",

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 import {
   lenientOptionalBoolean,
   lenientOptionalNumber,
@@ -172,7 +171,7 @@ describe("advertised JSON Schema retains usable type info", () => {
       maxCharacters: lenientOptionalPositiveNumber(),
       enableSummary: lenientOptionalBoolean(),
     };
-    const json = zodToJsonSchema(z.object(fields)) as {
+    const json = z.toJSONSchema(z.object(fields)) as {
       properties?: Record<string, { type?: string | string[] }>;
     };
     const props = json.properties ?? {};
@@ -201,7 +200,7 @@ describe("advertised JSON Schema retains usable type info", () => {
         0,
       );
 
-      const json = zodToJsonSchema(z.object(inputSchema)) as {
+      const json = z.toJSONSchema(z.object(inputSchema)) as {
         properties?: Record<string, { type?: string | string[]; description?: string }>;
       };
       const props = json.properties ?? {};

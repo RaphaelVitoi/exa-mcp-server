@@ -288,15 +288,11 @@ function sanitizeTopLevelResponse(value: unknown): Record<string, unknown> {
   return sanitized;
 }
 
-export function sanitizeSearchResponse(
-  response: unknown,
-): Record<string, unknown> {
+export function sanitizeSearchResponse(response: unknown): Record<string, unknown> {
   return sanitizeTopLevelResponse(response);
 }
 
-export function sanitizeDeepSearchStructuredResponse(
-  response: unknown,
-): Record<string, unknown> {
+export function sanitizeDeepSearchStructuredResponse(response: unknown): Record<string, unknown> {
   const sanitized = sanitizeTopLevelResponse(response);
   const structured: Record<string, unknown> = {};
 

@@ -2,9 +2,8 @@ process.env.AGNOST_LOG_LEVEL = "error";
 
 import { randomUUID } from "node:crypto";
 import { createMcpHandler } from "mcp-handler";
-import type { Implementation } from "@modelcontextprotocol/sdk/types.js";
 import { initializeMcpServer, type McpConfig } from "../src/mcp-handler.js";
-import { DEFAULT_MCP_MAX_DURATION_SECONDS, parsePositiveInteger } from "../src/tools/agentRun.js";
+import { parsePositiveInteger } from "../src/tools/agentRun.js";
 import type { Ratelimit } from "@upstash/ratelimit";
 import type { Redis } from "@upstash/redis";
 import { isJwtToken, verifyOAuthToken } from "../src/utils/auth.js";
@@ -572,8 +571,6 @@ async function getConfigFromRequest(request: Request): Promise<RequestConfig> {
  * different users who might pass different keys via URL.
  */
 function createHandler(config: McpConfig) {
-  const maxDuration = config.mcpMaxDurationSeconds ?? DEFAULT_MCP_MAX_DURATION_SECONDS;
-
   return createMcpHandler(
     (server: any) => {
       initializeMcpServer(server, config);
@@ -581,19 +578,9 @@ function createHandler(config: McpConfig) {
     {
       serverInfo: {
         name: "exa-search-server",
-        title: "Exa",
         version: "3.4.1",
-        websiteUrl: "https://exa.ai",
-        icons: [
-          {
-            src: "https://exa.ai/images/favicon-32x32.png",
-            mimeType: "image/png",
-            sizes: ["32x32"],
-          },
-        ],
-      } satisfies Implementation as { name: string; version: string },
+      },
     },
-    { basePath: "/api", maxDuration },
   );
 }
 

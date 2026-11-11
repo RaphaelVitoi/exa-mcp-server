@@ -14,7 +14,8 @@ export function registerLinkedInSearchTool(
   server.registerTool(
     "linkedin_search_exa",
     {
-      description: "⚠️ DEPRECATED: This tool is deprecated. Please use 'people_search_exa' instead. This tool will be removed in a future version. For now, it searches for people on LinkedIn using Exa AI - finds professional profiles and people.",
+      description:
+        "⚠️ DEPRECATED: This tool is deprecated. Please use 'people_search_exa' instead. This tool will be removed in a future version. For now, it searches for people on LinkedIn using Exa AI - finds professional profiles and people.",
       inputSchema: {
         query: lenientString().describe("Search query for finding people on LinkedIn"),
         numResults: lenientOptionalNumber().describe(

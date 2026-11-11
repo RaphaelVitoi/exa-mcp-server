@@ -279,13 +279,7 @@ export interface ExaCodeResponse {
 
 export type AgentEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "auto";
 export type AgentDataSourceProvider =
-  | "fiber"
-  | "financial_datasets"
-  | "similarweb"
-  | "baselayer"
-  | "affiliate"
-  | "particle"
-  | "jinko";
+  "fiber" | "financial_datasets" | "similarweb" | "baselayer" | "affiliate" | "particle" | "jinko";
 
 export type AgentRunInput = {
   query: string;

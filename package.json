@@ -56,24 +56,24 @@
     "prepublishOnly": "npm run build:stdio"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
-    "agnost": "^0.2.0",
-    "exa-js": "^2.16.0",
-    "jose": "^6.2.2",
-    "mcp-handler": "^1.0.4",
-    "zod": "^3.22.4"
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "agnost": "^0.2.1",
+    "exa-js": "^2.28.0",
+    "jose": "^6.2.17",
+    "mcp-handler": "^2.3.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^20.11.24",
-    "@upstash/ratelimit": "^2.0.8",
-    "@upstash/redis": "^1.36.1",
-    "@vitest/coverage-v8": "4.1.5",
-    "esbuild": "^0.25.12",
-    "prettier": "3.8.1",
-    "tsx": "^4.7.0",
-    "typescript": "^5.9.3",
-    "vercel": "^37.0.0",
-    "vitest": "4.1.5"
+    "@types/node": "^26.6.6",
+    "@upstash/ratelimit": "^2.2.0",
+    "@upstash/redis": "^1.41.0",
+    "@vitest/coverage-v8": "5.1.0",
+    "esbuild": "^0.28.2",
+    "prettier": "3.10.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vercel": "^65.14.0",
+    "vitest": "5.1.0"
   },
   "engines": {
     "node": ">=20.0.0"

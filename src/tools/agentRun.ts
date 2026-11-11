@@ -18,7 +18,7 @@ import {
 import { createExaClient } from "./config.js";
 
 const effortSchema = z.enum(["minimal", "low", "medium", "high", "xhigh", "auto"]);
-const recordSchema = () => z.record(z.unknown());
+const recordSchema = () => z.record(z.string(), z.unknown());
 const dataSourceProviderSchema = z.enum([
   "fiber",
   "financial_datasets",
@@ -131,12 +131,7 @@ export type AgentRunClient = {
 type Interrupt = "client_aborted" | "window_exceeded";
 type HandoffReason = "stream_window_exceeded" | "stream_interrupted" | "poll_window_exceeded";
 type RunOutcomeStatus =
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "running"
-  | "client_aborted"
-  | "unrecoverable_stream";
+  "completed" | "failed" | "cancelled" | "running" | "client_aborted" | "unrecoverable_stream";
 
 export type RunOutcome = {
   status: RunOutcomeStatus;
@@ -393,9 +388,15 @@ export async function streamAgentRun(params: {
       interrupt: interrupt.promise,
       progressBridge,
       finish,
-      setRunId: (id) => { runId = id; },
-      setTerminalEvent: (e) => { terminalEvent = e; },
-      incrementEventCount: () => { eventCount += 1; },
+      setRunId: (id) => {
+        runId = id;
+      },
+      setTerminalEvent: (e) => {
+        terminalEvent = e;
+      },
+      incrementEventCount: () => {
+        eventCount += 1;
+      },
       getRunId: () => runId,
     });
     return loopResult!;
@@ -427,12 +428,12 @@ async function pollIteration(params: {
   params.incrementCount();
   await params.emitProgress(`waiting: run ${params.runId} status=${fetched.value.status}`);
   if (TERMINAL_STATUSES.has(fetched.value.status)) {
-    return { done: true, result: await params.finish(fetched.value.status as "completed" | "failed" | "cancelled") };
+    return {
+      done: true,
+      result: await params.finish(fetched.value.status as "completed" | "failed" | "cancelled"),
+    };
   }
-  const waited = await raceWithInterrupt(
-    delay(params.pollIntervalMs),
-    params.interrupt,
-  );
+  const waited = await raceWithInterrupt(delay(params.pollIntervalMs), params.interrupt);
   if (waited.kind === "interrupt") {
     const reason = waited.reason === "window_exceeded" ? "poll_window_exceeded" : undefined;
     return { done: true, result: await params.finish("running", reason) };
@@ -457,10 +458,7 @@ export async function pollAgentRun(params: {
   let run: AgentRun | null = null;
   let updateCount = 0;
 
-  const finish = (
-    status: RunOutcomeStatus,
-    handoffReason?: HandoffReason,
-  ): Promise<RunOutcome> => {
+  const finish = (status: RunOutcomeStatus, handoffReason?: HandoffReason): Promise<RunOutcome> => {
     interrupt.cleanup();
     return Promise.resolve({
       status,
@@ -482,8 +480,12 @@ export async function pollAgentRun(params: {
         interrupt: interrupt.promise,
         emitProgress,
         pollIntervalMs: params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-        setRun: (r) => { run = r; },
-        incrementCount: () => { updateCount += 1; },
+        setRun: (r) => {
+          run = r;
+        },
+        incrementCount: () => {
+          updateCount += 1;
+        },
         finish,
       });
       if (iteration.done) return iteration.result;
@@ -687,7 +689,8 @@ export function registerAgentRunTool(
   server.registerTool(
     "agent_run",
     {
-      description: "Start or resume an Exa Agent run; runs may take several minutes. Retain the returned run ID and resume with runId when the tool reports the run is still running. An interrupted tool call is not an explicit cancellation request.",
+      description:
+        "Start or resume an Exa Agent run; runs may take several minutes. Retain the returned run ID and resume with runId when the tool reports the run is still running. An interrupted tool call is not an explicit cancellation request.",
       inputSchema: agentRunInputShape,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false },
     },

@@ -55,11 +55,7 @@ export function registerWebSearchTool(
       const categoryMatch = categoryPattern.exec(query);
       const category = categoryMatch
         ? (categoryMatch[1].toLowerCase().replace(/\s+/g, " ") as
-            | "company"
-            | "publication"
-            | "news"
-            | "personal site"
-            | "people")
+            "company" | "publication" | "news" | "personal site" | "people")
         : undefined;
       const cleanedQuery = categoryMatch
         ? query.replace(categoryMatch[0], "").replace(/\s+/g, " ").trim()
